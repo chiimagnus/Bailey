@@ -1378,7 +1378,7 @@ final class DelimitedGridInteractionTests: XCTestCase {
         XCTAssertEqual(file.text, expected)
     }
 
-    func testFindReplaceMenuTargetsOnlyTheCurrentWritableCSV() async throws {
+    func testFindMenuAndLocalReplacementTargetOnlyTheCurrentWritableCSV() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1405,8 +1405,10 @@ final class DelimitedGridInteractionTests: XCTestCase {
         window.orderBack(nil)
         _ = try await grid(in: host, showing: "Item")
         XCTAssertTrue(manager.canFind)
-        XCTAssertTrue(manager.canReplace)
-        manager.performFindAction(.replace)
+        manager.showFind()
+        XCTAssertTrue(file.delimitedTable.showsFind)
+        // The replacement toggle belongs to the local Find widget.
+        file.delimitedTable.showsReplace = true
         XCTAssertTrue(file.delimitedTable.showsReplace)
         file.delimitedTable.query = "cafe"
         func editableFields(in view: NSView) -> Int {
@@ -1426,11 +1428,69 @@ final class DelimitedGridInteractionTests: XCTestCase {
         host.rootView = AnyView(FileViewerView(file: readOnly, canFocus: { false }).id(readOnly.id))
         _ = try await grid(in: host, showing: "Other")
         XCTAssertTrue(manager.canFind)
-        XCTAssertFalse(manager.canReplace)
-        manager.performFindAction(.show)
+        let snapshot = try XCTUnwrap(readOnly.delimitedTable.parsed)
+        XCTAssertFalse(readOnly.canEditDelimited(snapshot))
+        manager.showFind()
         XCTAssertTrue(readOnly.delimitedTable.showsFind)
         XCTAssertFalse(readOnly.delimitedTable.showsReplace)
         XCTAssertEqual(file.delimitedTable.query, "cafe")
+    }
+
+    func testRepeatedFindSeedsNewCSVCellRatherThanAutomaticMatch() async throws {
+        let original = "Name,Value\nAlpha,needle suffix\nBeta,other\nGamma,中文👋"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try Data(original.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        defer { file.retireContent() }
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 600, height: 340),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file, canFocus: { false }, rendersOnlyPreview: true))
+        window.contentView = host
+        window.orderBack(nil)
+        let grid = try await self.grid(in: host, showing: "Alpha")
+        let controls = file.delimitedTable
+        typealias Cell = DelimitedTablePresentation.Cell
+        XCTAssertTrue(window.makeFirstResponder(grid.table))
+        grid.table.select(Cell(row: 0, column: 0))
+        controls.presentFind()
+        XCTAssertEqual(controls.query, "Alpha")
+        controls.query = "needle"
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while grid.table.selection.caret != Cell(row: 0, column: 1), ContinuousClock.now < deadline {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(grid.table.selection.caret, Cell(row: 0, column: 1))
+        controls.presentFind()
+        XCTAssertEqual(controls.query, "needle", "The full matching cell must not replace a substring query")
+        grid.table.select(Cell(row: 1, column: 1))
+        controls.presentFind()
+        XCTAssertEqual(controls.query, "other")
+        grid.table.select(Cell(row: 2, column: 1))
+        controls.presentFind()
+        XCTAssertEqual(controls.query, "中文👋")
+        grid.table.select(Cell(row: 1, column: 1), extending: true)
+        controls.presentFind()
+        XCTAssertEqual(controls.query, "中文👋")
+        grid.table.clearSelection()
+        controls.presentFind()
+        XCTAssertEqual(controls.query, "中文👋")
+        grid.table.select(Cell(row: 0, column: 0))
+        controls.dismissFind()
+        controls.presentFind()
+        XCTAssertEqual(controls.query, "Alpha")
+        grid.table.onEdit(Cell(row: 0, column: 1))
+        let cellEditor = try XCTUnwrap(grid.activeEditor)
+        cellEditor.setSelectedRange((cellEditor.string as NSString).range(of: "suffix"))
+        controls.presentFind()
+        XCTAssertEqual(controls.query, "suffix", "Inline cell editing seeds the selected text, not the whole cell")
+        grid.cancelEditing()
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(try Data(contentsOf: url), Data(original.utf8))
     }
 
     func testHiddenFindPreservesSelectionAndNavigationStartsAtActualCaret() async throws {
@@ -1460,9 +1520,9 @@ final class DelimitedGridInteractionTests: XCTestCase {
             XCTAssertEqual(grid.table.selection.caret, expected)
         }
         controls.query = "needle"
-        controls.perform(.show)
+        controls.presentFind()
         try await expectCaret(.init(row: 0, column: 1))
-        controls.perform(.hide)
+        controls.dismissFind()
         let selected = Cell(row: 1, column: 0)
         grid.table.select(selected, reveal: true)
         controls.configuration.sort = [.init(column: 0, ascending: false)]
@@ -1478,13 +1538,20 @@ final class DelimitedGridInteractionTests: XCTestCase {
             }
         }
         XCTAssertEqual(grid.table.selection.caret, selected)
-        controls.perform(.next)
+        controls.presentFind()
+        XCTAssertEqual(controls.query, "Beta", "Reopening Find uses the current selected cell")
+        controls.query = "needle"
         try await expectCaret(.init(row: 2, column: 1))
-        controls.perform(.previous)
+        controls.navigateFind(forward: false)
         try await expectCaret(.init(row: 0, column: 1))
         grid.table.select(selected, reveal: true)
-        controls.perform(.previous)
+        controls.navigateFind(forward: false)
         try await expectCaret(.init(row: 0, column: 1))
+        controls.navigateFind(forward: false)
+        try await expectCaret(.init(row: 2, column: 1))
+        controls.navigateFind(forward: true)
+        try await expectCaret(.init(row: 0, column: 1))
+        controls.dismissFind()
         XCTAssertFalse(controls.showsFind)
         XCTAssertFalse(file.isDirty)
         XCTAssertFalse(file.documentUndoManager.canUndo)
@@ -1559,29 +1626,47 @@ final class DelimitedGridInteractionTests: XCTestCase {
             attribute(element, "accessibilityLabel") as? String
         }
         let controls = file.delimitedTable
-        controls.perform(.show)
+        controls.presentFind()
+        let expectedCount = String(localized: "\("1") of \(1)", table: "Editor")
         func matchCountIsPublished(_ count: String) -> Bool {
             elements().contains {
-                attribute($0, "accessibilityIdentifier") as? String == "bailey.csv.match-count"
+                attribute($0, "accessibilityIdentifier") as? String == "bailey.find.count"
                     && (attribute($0, "accessibilityValue") as? String == count || label($0) == count)
             }
         }
         XCTAssertTrue(file.delimitedTable.showsFind)
         controls.query = "Other"
         let literalDeadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while !matchCountIsPublished("1") || grid.table.selection.caret != .init(row: 1, column: 0) {
+        while grid.table.selection.caret != .init(row: 1, column: 0) {
             guard ContinuousClock.now < literalDeadline else { break }
             host.layoutSubtreeIfNeeded()
             try await Task.sleep(for: .milliseconds(10))
         }
-        XCTAssertTrue(matchCountIsPublished("1"))
         XCTAssertEqual(grid.table.selection.caret, .init(row: 1, column: 0))
-        controls.query = ""
-        let clearedDeadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while !matchCountIsPublished("0"), ContinuousClock.now < clearedDeadline {
+        let compactDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !matchCountIsPublished(expectedCount), ContinuousClock.now < compactDeadline {
             try await Task.sleep(for: .milliseconds(10))
         }
-        XCTAssertTrue(matchCountIsPublished("0"), "An empty literal query has no matches")
+        XCTAssertTrue(matchCountIsPublished(expectedCount), "The compact default width retains the count")
+        window.setContentSize(NSSize(width: 290, height: 360))
+        let narrowDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while matchCountIsPublished(expectedCount), ContinuousClock.now < narrowDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertFalse(matchCountIsPublished(expectedCount), "A narrow pane hides the count without changing navigation")
+        window.setContentSize(NSSize(width: 600, height: 360))
+        let expandedDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !matchCountIsPublished(expectedCount), ContinuousClock.now < expandedDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(matchCountIsPublished(expectedCount))
+        controls.query = ""
+        let clearedDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while matchCountIsPublished(expectedCount), ContinuousClock.now < clearedDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertFalse(matchCountIsPublished(expectedCount), "An empty literal query must clear the previous result")
+        XCTAssertNil(controls.matchPosition)
 
         XCTAssertFalse(file.hasPendingDelimitedEdit)
         XCTAssertFalse(file.isDirty)

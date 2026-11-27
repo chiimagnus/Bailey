@@ -198,6 +198,18 @@ nonisolated struct DelimitedTablePresentation: Sendable {
         return matches
     }
 
+    // find returns matches in display row and column order.
+    static func matchIndex(atOrAfter cell: Cell, in matches: [Cell]) -> Int {
+        var low = 0, high = matches.count
+        while low < high {
+            let middle = low + (high - low) / 2
+            let hit = matches[middle]
+            if (hit.row, hit.column) < (cell.row, cell.column) { low = middle + 1 }
+            else { high = middle }
+        }
+        return low
+    }
+
     static func firstMatch(_ query: String, in value: NSString, from offset: Int = 0) -> NSRange? {
         guard !query.isEmpty, (0..<value.length).contains(offset) else { return nil }
         let found = value.range(of: query, options: [.caseInsensitive, .diacriticInsensitive],
@@ -236,9 +248,7 @@ nonisolated struct DelimitedTablePresentation: Sendable {
             rows.firstIndex(of: occurrence.cell.row).map { Cell(row: $0, column: occurrence.cell.column) }
         }
         let continuation = caret == nil || caret == previousDisplay ? previous : nil
-        let starting = (caret ?? previousDisplay).flatMap { cell in
-            matches.firstIndex { $0.row > cell.row || $0.row == cell.row && $0.column >= cell.column }
-        } ?? 0
+        let starting = (caret ?? previousDisplay).map { Self.matchIndex(atOrAfter: $0, in: matches) } ?? 0
         for step in 0..<matches.count {
             try Task.checkCancellation()
             let visible = matches[(starting + step) % matches.count]

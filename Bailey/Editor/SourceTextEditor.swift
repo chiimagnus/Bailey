@@ -33,9 +33,8 @@ struct EditorPalette: Equatable {
     }
 }
 
-/// Native NSTextView wrapped for SwiftUI: plain-text editing with line numbers and
-/// the system search-and-replace find bar (⌘F / ⌥⌘F via the Edit ▸ Find menu,
-/// routed here by `FileTab.performFindAction`). Text edits are written
+/// Native NSTextView wrapped for SwiftUI: plain-text editing with line numbers.
+/// Find is a pane-local overlay. Text edits are written
 /// straight back to `FileTab.text`; scroll/cursor state is written back to
 /// `FileTab.editorState` as it changes and restored when the view is
 /// restored on relaunch. The tab retains the native editor across remounts.
@@ -96,7 +95,8 @@ struct SourceTextEditor: NSViewRepresentable {
             }
         }
         file.editorView = scrollView
-        container.focusOnAttach = isFocused
+        if let textView { file.textFind.attach(to: textView) }
+        container.focusOnAttach = isFocused && !file.textFind.isPresented
         container.canFocus = canFocus
         return container
     }
@@ -131,10 +131,6 @@ struct SourceTextEditor: NSViewRepresentable {
         // can leave stale fragments and incorrect gutter numbering.
         textView.showsLineNumbers = true
         textView.highlightSelectedLine = true
-        // Highlight every match as the query is typed in the find bar, the way
-        // the terminal's find bar searches as you type. Off by default in
-        // Native NSTextView.
-        textView.isIncrementalSearchingEnabled = true
         apply(to: textView, scrollView: scrollView)
         // The prefilled file-owned document is already the editor's TextKit source.
         // The first frame must size that document, not an empty view buffer.
@@ -201,7 +197,7 @@ struct SourceTextEditor: NSViewRepresentable {
               container.scrollView.superview === container else { return }
         let scrollView = container.scrollView
         container.canFocus = canFocus
-        container.focusOnAttach = isFocused
+        container.focusOnAttach = isFocused && !file.textFind.isPresented
         guard let textView = scrollView.documentView as? NativeCodeTextView else { return }
         (textView as? FocusReportingTextView)?.onBecomeFirstResponder = onFocused
         (textView as? FocusReportingTextView)?.onResignFirstResponder = onResignFirstResponder
@@ -226,6 +222,7 @@ struct SourceTextEditor: NSViewRepresentable {
         (container.scrollView.documentView as? FocusReportingTextView)?.onResignFirstResponder = nil
         container.scrollView.removeFromSuperview()
         if coordinator.file?.editorView === container.scrollView {
+            coordinator.file?.textFind.detach(from: container.scrollView.documentView as? NativeCodeTextView)
             coordinator.file?.editorView = nil
         }
     }
@@ -284,7 +281,6 @@ struct SourceTextEditor: NSViewRepresentable {
         let revision: UInt
         private(set) var scrollView: NSScrollView?
         private weak var textView: NativeCodeTextView?
-        private var pendingReplacement: (range: NSRange, removed: String, inserted: String, originalLength: Int)?
         private var scrollObserver: (any NSObjectProtocol)?
         /// Last-applied focus state, so `updateNSView` can act only on the
         /// unfocused→focused edge.
@@ -374,8 +370,8 @@ struct SourceTextEditor: NSViewRepresentable {
             self.textView = textView
             self.scrollView = scrollView
             textView.delegate = self
-            textView.onCharacterEdit = { [weak self] range, replacement in
-                self?.handleNativeCharacterEdit(previousRange: range, replacement: replacement)
+            textView.onCharacterEdit = { [weak self] _, _, precise in
+                self?.handleNativeCharacterEdit(precise)
             }
             scrollObserver = NotificationCenter.default.addObserver(
                 forName: NSView.boundsDidChangeNotification,
@@ -393,8 +389,7 @@ struct SourceTextEditor: NSViewRepresentable {
                     // position is applied to a sized document view.
                     if (scrollView as? RestorableScrollView)?.restoreOnFirstLayout != nil { return }
                     file.editorState.scrollX = clipView.bounds.origin.x
-                    file.editorState.scrollY = (scrollView as? RestorableScrollView)?
-                        .sessionScrollY ?? clipView.bounds.origin.y
+                    file.editorState.scrollY = clipView.bounds.origin.y
                     editor?.syntaxCoordinator?.updateViewportRange(
                         editor?.textLayoutManager?.textViewportLayoutController.viewportRange
                     )
@@ -446,35 +441,18 @@ struct SourceTextEditor: NSViewRepresentable {
         func textView(_ view: NSTextView, shouldChangeTextIn range: NSRange,
                       replacementString: String?) -> Bool {
             guard view === textView, let file, file.editorCoordinator === self,
-                  let replacementString, let storage = view.textStorage else { return true }
-            guard file.delimitedEditTask == nil else { return false }
-            pendingReplacement = (range, storage.attributedSubstring(from: range).string,
-                                  replacementString, storage.length)
-            return true
+                  replacementString != nil else { return true }
+            return file.delimitedEditTask == nil
         }
 
-        private func handleNativeCharacterEdit(previousRange: NSRange,
-                                               replacement: String) {
+        private func handleNativeCharacterEdit(_ precise: NativeCodeTextView.CharacterReplacement?) {
             guard let file, file.editorCoordinator === self else { return }
-            // TextKit 2 reports the whole edited paragraph, not necessarily
-            // the caller's character replacement. Use the pre-edit delegate
-            // range only after verifying the actual storage length and bytes.
-            if let change = pendingReplacement,
-               previousRange.location <= change.range.location,
-               NSMaxRange(previousRange) >= NSMaxRange(change.range),
-               file.nativeTextStorage.length == change.originalLength
-                   - change.removed.utf16.count + change.inserted.utf16.count,
-               NSMaxRange(NSRange(location: change.range.location,
-                                   length: change.inserted.utf16.count)) <= file.nativeTextStorage.length,
-               file.nativeTextStorage.attributedSubstring(from: NSRange(
-                   location: change.range.location, length: change.inserted.utf16.count
-               )).string.utf8.elementsEqual(change.inserted.utf8) {
-                file.recordNativeReplacement(at: change.range,
-                    removing: change.removed, inserting: change.inserted)
+            if let precise {
+                file.recordNativeReplacement(at: precise.range, removing: precise.removed,
+                                             inserting: precise.inserted)
             } else {
                 file.nativeTextChangedWithoutReplacement()
             }
-            pendingReplacement = nil
             file.refreshDirtyState()
         }
 
@@ -565,11 +543,6 @@ private final class RestorableScrollView: NSScrollView {
     private var lastViewportSize: NSSize = .zero
     private var geometryUpdateScheduled = false
     private var reparentedOffset: NSPoint?
-    private var appliedFindBarHeight: CGFloat = 0
-    private var lastVisibleFindBarOriginY: CGFloat?
-
-    var sessionScrollY: CGFloat { contentView.bounds.origin.y + appliedFindBarHeight }
-
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if window != nil, newWindow == nil {
             reparentedOffset = contentView.bounds.origin
@@ -584,42 +557,12 @@ private final class RestorableScrollView: NSScrollView {
 
     override func layout() {
         super.layout()
-        alignFindBarAndDocument()
         let viewportSize = contentView.bounds.size
         if viewportSize != lastViewportSize {
             lastViewportSize = viewportSize
             scheduleEditorGeometryUpdate()
         }
         restoreInitialOffsetIfReady()
-    }
-
-    override func reflectScrolledClipView(_ clipView: NSClipView) {
-        super.reflectScrolledClipView(clipView)
-        if isFindBarVisible { lastVisibleFindBarOriginY = clipView.bounds.origin.y }
-    }
-
-    private func alignFindBarAndDocument() {
-        let findHeight = isFindBarVisible ? (findBarView?.bounds.height ?? 0) : 0
-        guard abs(findHeight - appliedFindBarHeight) > 0.5 else { return }
-        let clipView = contentView
-        let origin = clipView.bounds.origin
-        // On hide, AppKit clamps a previously negative find-bar origin to 0
-        // before laying out the scroll view. Recover that last visible origin
-        // so we never apply the bar-height adjustment a second time.
-        let previousY: CGFloat
-        if findHeight == 0, origin.y == 0,
-           let visibleY = lastVisibleFindBarOriginY, visibleY < 0 {
-            previousY = visibleY
-        } else {
-            previousY = origin.y
-        }
-        let offset = appliedFindBarHeight - findHeight
-        appliedFindBarHeight = findHeight
-        if findHeight == 0 { lastVisibleFindBarOriginY = nil }
-        // AppKit owns the find-bar content inset. We only reconcile the
-        // document's visible origin when that top overlay changes height.
-        clipView.setBoundsOrigin(NSPoint(x: origin.x, y: previousY + offset))
-        reflectScrolledClipView(clipView)
     }
 
     private func restoreInitialOffsetIfReady() {

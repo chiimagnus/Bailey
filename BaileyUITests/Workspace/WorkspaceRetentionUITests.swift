@@ -1028,7 +1028,7 @@ final class WorkspaceRetentionUITests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: afterPID, encoding: .utf8), originalShell,
                        "Switching real App tabs must preserve the same shell process")
         app.typeKey("f", modifierFlags: .command)
-        XCTAssertTrue(window.textFields.firstMatch.waitForExistence(timeout: 12),
+        XCTAssertTrue(window.textFields["bailey.find.query"].waitForExistence(timeout: 12),
                       "Terminal Find must mount the native find input")
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         app.typeKey("]", modifierFlags: [.command, .shift])

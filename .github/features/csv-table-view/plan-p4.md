@@ -30,7 +30,8 @@ P3-T2 完成有效解析／投影身份及固定行号与数据格的动作映�
 
 - **位置**：`DelimitedGrid.columnMenu/installColumns`、`DelimitedHeader`、`DelimitedTableControls.accept`、
   `DelimitedTableMutation.Change/prepare`、`DelimitedTableIndex.fields(in:)`、FileTab 的既有编辑事务。
-- **操作**：列头菜单插入左／右列，移动列拖动表头并以轻量插入线指示落点，不实时重排表格。
+- **操作**：列头菜单插入左／右列；拖动表头只移动被拖动的一列，
+  以轻量插入线指示落点，不实时重排表格，不成组移动多选列。
   边缘横向自动滚动，Esc 或无效落点取消；松开时提交一次原文事务。
   「删除列」是唯一删除入口：右键已选整列时删除该选区，否则只删除命中列。
   结构修改作用于全部物理记录（含表头及隐藏行），不是 NSTableView 的展示重排；菜单使用简洁的列操作名称。
@@ -111,20 +112,19 @@ P3-T2 完成有效解析／投影身份及固定行号与数据格的动作映�
 ### P4-T3 清空与原生查找替换
 
 - **位置**：`DelimitedGrid.recordMenu/paste`、`DelimitedNativeTable`、`DelimitedTablePresentation.Selection/find`、
-  `DelimitedTableMutation.prepare`、`CSVTableView.overlay`、`DelimitedTableControls.perform`、
-  `WorkspaceWindowModel.focusedPreviewFile/canReplace/performFindAction`、BaileyApp 既有 Find 菜单。
+  `DelimitedTableMutation.prepare`、`CSVTableView.overlay`、`DelimitedTableControls` 的局部查找操作、
+  `WorkspaceWindowModel.showFind` 与 BaileyApp 的 `⌘F` 菜单。
 - **操作与范围**：清空仅处理实际选中的可见格，重叠只处理一次、空洞不写入、不删行列。
   ⌘A 选择全部可见数据格；Delete／Forward Delete 只在网格第一响应者时清空，
   不另设右键清空入口；field editor、查找框和其它控件遵循原生输入。
-  扩展现有 ⌘F 浮层及系统 ⌥⌘F Find and Replace，默认可见数据，可选当前选区或全部数据记录。
-  全部包含隐藏行但不含表头；超出显示上限时明确标示仅当前显示列，不暗中替换隐藏列。
-  选择「当前选区」时固定此次范围；showMatch 随查找移动 caret 不得把替换范围缩为当前命中格。
-  用户主动重选范围、正文／投影失效时更新或废弃旧范围；查找内部导航不改范围。展示匹配数及范围，用户明确点击替换／全部替换即为操作确认，
-  不再叠加同义确认框。单次替换只导航真实可见命中，不自动清除筛选。
+  使用[共享查找浮层](../../../docs/features/editor.md#查找与替换)的三种替换范围。
+  固定选区不随 showMatch 的 caret 移动改变；用户可重新选取，正文／投影失效时废弃旧范围。
+  展示范围及实际出现次数，明确执行替换（含替换框 Return）即为确认，不叠加同义对话框。
+  单次替换只导航真实可见命中，不自动清除筛选；全部替换才遍历指定范围。
 - **匹配**：沿用 find 的字面字符串、caseInsensitive／diacriticInsensitive，
   对解码字段内的实际不重叠匹配使用同一个实现；不跨字段或表头，空查询禁用替换，空替换合法。
-  现有 find 返回匹配格而非出现次数；普通查找继续按格导航，替换时计数实际命中，
-  单次替换定位当前格的一个命中并从替换区间之后继续；
+  find 按展示行列顺序返回匹配格，导航、计数位置及单次替换起点复用二分定位；首尾循环。
+  空查询／关闭清除旧搜索结果。替换计数使用实际出现次数，单次替换定位一个命中并从替换区间之后继续；
   全部替换不递归处理刚插入的字符串，不常驻全表出现位置数组。
 - **事务**：复用 P3 的区间选区及当前快照，在后台遍历真实记录和字段，生成一组 Replacement。
   清空／粘贴和替换共用已有字段转义与准备链；
@@ -134,12 +134,12 @@ P3-T2 完成有效解析／投影身份及固定行号与数据格的动作映�
   测量真实 applyDocumentReplacements 和逆变换 Undo 成本，再针对实测主线程瓶颈精简。
   不在后台修改 NSTextStorage、不拆成多个可见部分事务、不建批处理引擎。
   无变化不置脏，每次用户动作一次原文提交与 Undo。
-- **权限与状态**：P3 当前有效解析快照和投影提供真实输入，FileTab.canEditDelimited 与 pending edit
-  派生菜单启用；执行时核对现有快照、范围、查询及操作意图，不复制可写标志或遍历视图决定业务许可。
+- **权限与状态**：当前有效解析快照和投影提供真实输入，FileTab.canEditDelimited 与 pending edit
+  决定浮层替换许可；执行时核对现有快照、范围、查询及操作意图，不复制可写标志或遍历视图决定业务许可。
   复用现有 SearchRequest 与实际任务取消，过期结果不能进入事务。
   只读仍可 Find，源码、Diff 和 HTML 既有路由保持原行为。
-- **本任务清理**：删除 `DelimitedTableControls.perform(.replace)` 的空分支及 canReplace 排除 CSV 的旧路径。
-  不保留旧版查找／替换浮层；在现有匹配和 Mutation 准备链内收敛实际重复扫描、转义和批量逐格字典构造，
+- **本任务清理**：复用唯一 `FindWidget` 与实际可写许可，不增加独立替换菜单。
+  在现有匹配和 Mutation 准备链内收敛实际重复扫描、转义和批量逐格字典构造，
   用验证证明替换的旧路径不再被调用。
 - **验收**：单格／整表／整列、非连续重叠、未选空洞、隐藏行、同格多处匹配、无匹配、
   大小写／变音符号／组合字符／quoted 换行、空替换、超过显示列／容量、选择中导航、

@@ -2220,6 +2220,77 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertEqual(project.panelRefreshKey(), finished, "Retired terminal callbacks must not refresh")
     }
 
+    func testRepeatedTerminalFindSeedsNewNativeSelection() async throws {
+        let terminal = TerminalSession(launchCommand: "exec /bin/sh -c 'stty -echo -echonl; printf \"alpha     \"; read ignored; printf beta; exec /bin/sleep 60'")
+        defer { terminal.terminate() }
+        let host = NSHostingView(rootView: TerminalHostView(session: terminal, isFocused: false))
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 600, height: 340),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = NSView(frame: window.contentLayoutRect)
+        host.frame = root.bounds
+        host.autoresizingMask = [.width, .height]
+        root.addSubview(host)
+        window.contentView = root
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        try await settle { terminal.shellPid != nil }
+        let surface = terminal.surface
+        let find = terminal.find
+        find.present()
+        find.query = "alpha"
+        try await settle { find.total == 1 }
+        func caretRect() -> CGRect {
+            window.convertFromScreen(surface.firstRect(forCharacterRange: .init(location: 0, length: 0),
+                                                       actualRange: nil))
+        }
+        let before = caretRect()
+        surface.sendText("\n")
+        try await settle { caretRect().minX > before.minX + 1 }
+        let caret = caretRect()
+        XCTAssertEqual(caret.midY, before.midY, accuracy: 1)
+        let cellWidth = (caret.minX - before.minX) / 4
+        XCTAssertGreaterThan(cellWidth, 0)
+        XCTAssertGreaterThan(caret.height, 0)
+        // Ghostty reports the bottom of the caret cell as its IME anchor.
+        let rowCenter = caret.maxY + caret.height / 2
+        let start = CGPoint(x: before.minX - 0.4 * cellWidth, y: rowCenter)
+        let end = CGPoint(x: caret.minX - 0.6 * cellWidth, y: rowCenter)
+        func mouse(_ type: NSEvent.EventType, at point: CGPoint) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1))
+        }
+        XCTAssertTrue(window.makeFirstResponder(surface))
+        surface.mouseDown(with: try mouse(.leftMouseDown, at: start))
+        surface.mouseDragged(with: try mouse(.leftMouseDragged, at: end))
+        surface.mouseUp(with: try mouse(.leftMouseUp, at: end))
+        try await settle { surface.hasSelection }
+        XCTAssertTrue(window.firstResponder === surface)
+        XCTAssertTrue(surface.hasSelection)
+        find.present()
+        try await settle { find.query == "beta" }
+        XCTAssertTrue(find.isPresented)
+        XCTAssertEqual(find.query, "beta")
+        try await settle { find.total == 1 }
+        find.dismiss()
+        XCTAssertFalse(find.isPresented)
+        find.present()
+        XCTAssertTrue(find.isPresented)
+        XCTAssertEqual(find.query, "beta")
+        try await settle { find.total == 1 }
+        let input = NSTextField(string: "")
+        root.addSubview(input)
+        defer { input.removeFromSuperview() }
+        XCTAssertTrue(window.makeFirstResponder(input))
+        find.query = "alpha"
+        find.present()
+        XCTAssertEqual(find.query, "alpha", "Retained terminal selection must not overwrite focused find input")
+        XCTAssertTrue(terminal.surface === surface)
+        find.dismiss()
+    }
+
     func testTerminalAndFindObservationPreserveNativeSurfaceIdentity() async throws {
         let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
         defer { terminal.terminate() }

@@ -213,16 +213,6 @@
         }
       }
     },
-    "Find" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "查找"
-          }
-        }
-      }
-    },
     "Loading remote folders…" : {
       "localizations" : {
         "zh-Hans" : {

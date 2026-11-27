@@ -162,6 +162,7 @@ final class DiffTab: nonisolated Identifiable {
     private(set) var editableBaseline: DiffEditableBaseline?
     /// Owned by the tab, never by a transient SwiftUI mount.
     @ObservationIgnored var nativeSurface: DiffNativeSurface?
+    let textFind = TextFind()
 
     func retireNativeSurface() {
         saveError = nil
@@ -1895,6 +1896,14 @@ struct DiffViewerView: View {
                             DiffNativeRoot(diff: diff, isFocused: isFocused,
                                            canFocus: canFocus, onFocused: onFocused)
                                 .id(diff.id)
+                                .overlay(alignment: .topTrailing) {
+                                    TextFindWidget(find: diff.textFind, canReplace: diff.isEditing && diff.isEditableNow,
+                                                   canFocus: canFocus, onFocused: onFocused,
+                                                   toggleReplace: {
+                                        if diff.textFind.showsReplace { diff.textFind.showsReplace = false }
+                                        else { diff.nativeSurface?.presentFind(replacing: true) }
+                                    })
+                                }
                         } else {
                             DiffSkeletonView()
                         }

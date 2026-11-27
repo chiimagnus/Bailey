@@ -284,7 +284,7 @@ final class DiffFoldLiveMutationTests: XCTestCase {
             revision: 1
         )
         pane.textView.isEditable = true
-        pane.textView.onCharacterEdit = { [weak pane] range, replacement in
+        pane.textView.onCharacterEdit = { [weak pane] range, replacement, _ in
             pane?.applyLiveNativeEdit(previousRange: range, replacement: replacement)
         }
         func ghostGap() throws -> CGFloat {

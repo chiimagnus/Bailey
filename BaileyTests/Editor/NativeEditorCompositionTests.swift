@@ -52,7 +52,7 @@ final class NativeEditorCompositionTests: XCTestCase {
             editor.delegate = delegate
             var previous = original
             var callbacks = 0
-            editor.onCharacterEdit = { [weak editor] previousRange, replacement in
+            editor.onCharacterEdit = { [weak editor] previousRange, replacement, _ in
                 guard let editor, let storage = editor.textStorage else { return }
                 callbacks += 1
                 let range = storage.editedRange
@@ -364,7 +364,7 @@ final class NativeEditorCompositionTests: XCTestCase {
             defer { window.close() }
             window.contentView = editor
             var actual: [(NSRange, String)] = []
-            editor.onCharacterEdit = { range, value in actual.append((range, value)) }
+            editor.onCharacterEdit = { range, value, _ in actual.append((range, value)) }
             editor.setMarkedText("n", selectedRange: NSRange(location: 1, length: 0),
                                  replacementRange: NSRange(location: 7, length: 6))
             editor.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0),

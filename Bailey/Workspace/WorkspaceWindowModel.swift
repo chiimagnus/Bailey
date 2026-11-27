@@ -12,18 +12,6 @@ enum ToolPanel {
     case git
 }
 
-/// One Find menu command, routed from the menu bar to whichever find
-/// implementation the focused pane owns: Ghostty's own search in a terminal,
-/// `NSTextFinder` in a file editor, or the focused read-only preview.
-enum FindAction {
-    case show
-    case replace
-    case hide
-    case next
-    case previous
-    case useSelection
-}
-
 /// Owns the window's project collection, current selection and action routing.
 @MainActor
 @Observable
@@ -678,46 +666,36 @@ final class WorkspaceWindowModel {
         diff.setDiffStyle(diff.preferences.diffStyle == .unified ? .split : .unified)
     }
 
-    /// Routes a Find menu command to the focused pane. Driven off the focused
-    /// pane rather than the first responder, so ⌘F and ⌘G keep working while
-    /// the find bar's own field holds keyboard focus.
-    func performFindAction(_ action: FindAction) {
+    /// Find follows the active Dock item even while its widget owns keyboard focus.
+    func showFind() {
         guard canFind else { return }
         if let focusedDelimitedTable {
-            focusedDelimitedTable.perform(action)
+            focusedDelimitedTable.presentFind()
             return
         }
         if let focusedHTMLPreview {
-            focusedHTMLPreview.performFindAction(action)
+            focusedHTMLPreview.presentFind()
             return
         }
         switch selectedProject?.focusedContent {
-        case .session(let session): session.find.perform(action)
-        case .file(let file): file.performFindAction(action)
-        case .diff(let diff): diff.nativeSurface?.performFindAction(action)
+        case .session(let session): session.find.present()
+        case .file(let file): file.textFind.present()
+        case .diff(let diff): diff.nativeSurface?.presentFind()
         case .browser, .none: break
         }
     }
 
     /// Find uses the active pane's text, terminal or read-only preview surface.
     var canFind: Bool {
+        guard !isClosed, !isCommandPaletteVisible, attachedWindow?.attachedSheet == nil else { return false }
         if focusedDelimitedTable != nil || focusedHTMLPreview != nil { return true }
         switch selectedProject?.focusedContent {
-        case .session, .diff: return true
-        case .file(let file): return selectedProject?.dock.activeGroup?.selected?.tabID != nil && !file.showsFilePreview
+        case .session: return true
+        case .diff(let diff): return diff.canPresentNativeContent
+        case .file(let file):
+            guard case .text = file.content else { return false }
+            return selectedProject?.dock.activeGroup?.selected?.tabID != nil && !file.showsFilePreview
         case .browser, .none: return false
-        }
-    }
-
-    var canReplace: Bool {
-        switch selectedProject?.focusedContent {
-        case .file(let file) where focusedDelimitedTable != nil:
-            guard let snapshot = file.delimitedTable.parsed, !file.hasPendingDelimitedEdit,
-                  snapshot.parseRequest == file.delimitedTable.request(for: file) else { return false }
-            return file.canEditDelimited(snapshot)
-        case .file: return canFind && focusedHTMLPreview == nil
-        case .diff(let diff): return diff.isEditing && diff.isEditableNow
-        case .session, .browser, .none: return false
         }
     }
 

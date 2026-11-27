@@ -608,7 +608,7 @@ final class NativeDiffTabTests: XCTestCase {
         }
         try await wait({ writable.canPresentNativeContent }, timeout: 15)
         XCTAssertTrue(manager.canFind, "A native writable Diff must expose the existing Find menu")
-        XCTAssertTrue(manager.canReplace, "An editable Worktree must expose native Find and Replace")
+        XCTAssertTrue(writable.isEditing && writable.isEditableNow)
 
         let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 800, height: 420),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -622,14 +622,14 @@ final class NativeDiffTabTests: XCTestCase {
         surface.layoutSubtreeIfNeeded()
         let pane = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
             .first { !$0.isHidden && $0.textView.isEditable })
-        manager.performFindAction(.show)
-        try await wait({ pane.scrollView.isFindBarVisible }, timeout: 3)
-        manager.performFindAction(.hide)
-        try await wait({ !pane.scrollView.isFindBarVisible }, timeout: 3)
-        manager.performFindAction(.replace)
-        try await wait({ pane.scrollView.isFindBarVisible }, timeout: 3)
-        manager.performFindAction(.hide)
-        try await wait({ !pane.scrollView.isFindBarVisible }, timeout: 3)
+        manager.showFind()
+        try await wait({ (pane.textView.findOwner?.isPresented == true) }, timeout: 3)
+        writable.textFind.dismiss()
+        try await wait({ !(pane.textView.findOwner?.isPresented == true) }, timeout: 3)
+        surface.presentFind(replacing: true)
+        try await wait({ (pane.textView.findOwner?.isPresented == true) }, timeout: 3)
+        writable.textFind.dismiss()
+        try await wait({ !(pane.textView.findOwner?.isPresented == true) }, timeout: 3)
 
         writable.setDiffStyle(.split)
         try await wait({ writable.editableBaseline != nil }, timeout: 15)
@@ -639,21 +639,21 @@ final class NativeDiffTabTests: XCTestCase {
             .first { !$0.isHidden && $0 !== pane && !$0.textView.isEditable })
         XCTAssertTrue(window.makeFirstResponder(baseline.textView))
         XCTAssertTrue(window.firstResponder === baseline.textView)
-        manager.performFindAction(.show)
-        try await wait({ baseline.scrollView.isFindBarVisible }, timeout: 3)
-        XCTAssertFalse(pane.scrollView.isFindBarVisible)
-        manager.performFindAction(.replace)
-        try await wait({ pane.scrollView.isFindBarVisible }, timeout: 3)
-        XCTAssertFalse(baseline.scrollView.isFindBarVisible,
+        manager.showFind()
+        try await wait({ (baseline.textView.findOwner?.isPresented == true) }, timeout: 3)
+        XCTAssertFalse((pane.textView.findOwner?.isPresented == true))
+        surface.presentFind(replacing: true)
+        try await wait({ (pane.textView.findOwner?.isPresented == true) }, timeout: 3)
+        XCTAssertFalse((baseline.textView.findOwner?.isPresented == true),
                        "Replace must move to the writable source without leaving a stale baseline Find bar")
-        manager.performFindAction(.hide)
-        try await wait({ !pane.scrollView.isFindBarVisible }, timeout: 3)
+        writable.textFind.dismiss()
+        try await wait({ !(pane.textView.findOwner?.isPresented == true) }, timeout: 3)
         writable.setDiffStyle(.unified)
         surface.render()
         surface.layoutSubtreeIfNeeded()
-        manager.performFindAction(.show)
-        try await wait({ pane.scrollView.isFindBarVisible }, timeout: 3)
-        manager.performFindAction(.hide)
+        manager.showFind()
+        try await wait({ (pane.textView.findOwner?.isPresented == true) }, timeout: 3)
+        writable.textFind.dismiss()
 
         XCTAssertEqual(GitCommandExecution.run(["add", "find.swift"], in: directory.path).status, 0)
         manager.openDiff(repoRoot: directory.path, path: "find.swift", staged: true,
@@ -663,7 +663,7 @@ final class NativeDiffTabTests: XCTestCase {
         }
         try await wait({ staged.canPresentNativeContent }, timeout: 15)
         XCTAssertTrue(manager.canFind, "Staged Diff must allow searching its read-only text")
-        XCTAssertFalse(manager.canReplace, "Staged content must never offer Replace")
+        XCTAssertFalse(staged.isEditing && staged.isEditableNow)
         let stagedWindow = NSWindow(contentRect: window.frame, styleMask: [.titled],
                                     backing: .buffered, defer: false)
         stagedWindow.isReleasedWhenClosed = false
@@ -676,12 +676,12 @@ final class NativeDiffTabTests: XCTestCase {
         stagedSurface.layoutSubtreeIfNeeded()
         let readonly = try XCTUnwrap(stagedSurface.subviews.compactMap { $0 as? DiffCodePaneView }
             .first { !$0.isHidden && !$0.textView.isEditable })
-        manager.performFindAction(.replace)
-        XCTAssertFalse(readonly.scrollView.isFindBarVisible,
+        stagedSurface.presentFind(replacing: true)
+        XCTAssertFalse((readonly.textView.findOwner?.isPresented == true),
                        "Even direct commands cannot enable replacement on a Staged Diff")
-        manager.performFindAction(.show)
-        try await wait({ readonly.scrollView.isFindBarVisible }, timeout: 3)
-        manager.performFindAction(.hide)
+        manager.showFind()
+        try await wait({ (readonly.textView.findOwner?.isPresented == true) }, timeout: 3)
+        staged.textFind.dismiss()
         staged.setDiffStyle(.split)
         stagedSurface.render()
         stagedSurface.layoutSubtreeIfNeeded()
@@ -690,11 +690,11 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(readonlyPanes.count, 2)
         let right = try XCTUnwrap(readonlyPanes.max(by: { $0.frame.minX < $1.frame.minX }))
         XCTAssertTrue(stagedWindow.makeFirstResponder(right.textView))
-        manager.performFindAction(.show)
-        try await wait({ right.scrollView.isFindBarVisible }, timeout: 3)
+        manager.showFind()
+        try await wait({ (right.textView.findOwner?.isPresented == true) }, timeout: 3)
         XCTAssertTrue(manager.canFind)
-        XCTAssertFalse(manager.canReplace)
-        manager.performFindAction(.hide)
+        XCTAssertFalse(staged.isEditing && staged.isEditableNow)
+        staged.textFind.dismiss()
         XCTAssertEqual(try Data(contentsOf: file), Data(changed.utf8))
         XCTAssertNotEqual(GitCommandExecution.run(["diff", "--cached", "--quiet"],
                                                in: directory.path).status, 0)
@@ -709,7 +709,7 @@ final class NativeDiffTabTests: XCTestCase {
         }
         try await wait({ historical.canPresentNativeContent }, timeout: 15)
         XCTAssertTrue(manager.canFind)
-        XCTAssertFalse(manager.canReplace)
+        XCTAssertFalse(historical.isEditing && historical.isEditableNow)
         let historyWindow = NSWindow(contentRect: window.frame, styleMask: [.titled],
                                      backing: .buffered, defer: false)
         historyWindow.isReleasedWhenClosed = false
@@ -723,9 +723,9 @@ final class NativeDiffTabTests: XCTestCase {
         let historyText = try XCTUnwrap(historySurface.subviews.compactMap { $0 as? DiffCodePaneView }
             .first { !$0.isHidden && !$0.textView.isEditable })
         XCTAssertEqual(historyText.textView.string, original)
-        manager.performFindAction(.show)
-        try await wait({ historyText.scrollView.isFindBarVisible }, timeout: 3)
-        manager.performFindAction(.hide)
+        manager.showFind()
+        try await wait({ (historyText.textView.findOwner?.isPresented == true) }, timeout: 3)
+        historical.textFind.dismiss()
         XCTAssertEqual(try Data(contentsOf: file), Data(changed.utf8))
     }
 
@@ -1301,7 +1301,7 @@ final class NativeDiffTabTests: XCTestCase {
         pane.layoutSubtreeIfNeeded()
         pane.textView.isEditable = true
         var callbackTimes: [Double] = []
-        pane.textView.onCharacterEdit = { [weak pane] range, replacement in
+        pane.textView.onCharacterEdit = { [weak pane] range, replacement, _ in
             let start = CFAbsoluteTimeGetCurrent()
             pane?.applyLiveNativeEdit(previousRange: range, replacement: replacement)
             callbackTimes.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)

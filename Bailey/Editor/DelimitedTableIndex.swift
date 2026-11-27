@@ -110,11 +110,8 @@ nonisolated struct DelimitedTableIndex: Sendable {
                 if scanned.issue == nil { consistent.append(candidate) }
             }
             if !consistent.isEmpty { candidates = consistent }
-            if candidates.count == 1, let detected = candidates.first { separator = detected }
             hasAmbiguousSeparator = candidates.count > 1 || (candidates.isEmpty && hasMore)
-            if hasAmbiguousSeparator, !candidates.contains(separator), let candidate = candidates.first {
-                separator = candidate
-            }
+            if !candidates.contains(separator), let candidate = candidates.first { separator = candidate }
         }
         let scanned = try scan(units, separator: separator)
         return Self(separator: separator, hasAmbiguousSeparator: hasAmbiguousSeparator,
@@ -122,9 +119,9 @@ nonisolated struct DelimitedTableIndex: Sendable {
                     issue: scanned.issue, fields: scanned.fields)
     }
 
-    private static func scan<Units: Sequence>(
-        _ units: Units, separator: Separator, sampleLimit: Int? = nil
-    ) throws -> Scanner where Units.Element == UInt16 {
+    private static func scan(
+        _ units: String.UTF16View, separator: Separator, sampleLimit: Int? = nil
+    ) throws -> Scanner {
         var iterator = units.makeIterator()
         var current = iterator.next()
         var scanner = Scanner()

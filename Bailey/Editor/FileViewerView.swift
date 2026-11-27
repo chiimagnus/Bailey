@@ -149,6 +149,7 @@ final class FileTab: nonisolated Identifiable {
     /// editor, nils out when the pane unmounts.
     @ObservationIgnored weak var editorView: NSView?
     @ObservationIgnored var editorCoordinator: SourceTextEditor.Coordinator?
+    let textFind = TextFind()
     @ObservationIgnored var preparedLineWidths: (font: NSFont, widths: NativeMeasuredLineWidths.Prepared)?
 
     /// A true close or accepted replacement releases the old native document,
@@ -166,6 +167,7 @@ final class FileTab: nonisolated Identifiable {
             NotificationCenter.default.removeObserver(nativeEditObserver)
             self.nativeEditObserver = nil
         }
+        textFind.detach()
         let coordinator = editorCoordinator
         editorCoordinator = nil
         editorView = nil
@@ -1972,6 +1974,11 @@ struct FileViewerView: View {
                             onFocused: onFocused
                         )
                         .id(file.reloadRevision)
+                        .overlay(alignment: .topTrailing) {
+                            TextFindWidget(find: file.textFind, canReplace: file.readOnlyReason == nil && !file.hasPendingDelimitedEdit,
+                                           canFocus: canFocus, onFocused: onFocused,
+                                           toggleReplace: { file.textFind.showsReplace.toggle() })
+                        }
                     }
                 }
             case .image(let image):

@@ -241,38 +241,11 @@ private struct BaileyCommands: Commands {
 
             Divider()
 
-            // Find follows the active dock content, not the find bar's first responder.
-            if manager?.canFind == true {
-                Menu(String(localized: "Find", table: "Interface")) {
-                    Button(String(localized: "Find…", table: "Interface")) {
-                        manager?.performFindAction(.show)
-                    }
-                    .keyboardShortcut("f", modifiers: .command)
-
-                    Button(String(localized: "Find and Replace…", table: "Interface")) {
-                        manager?.performFindAction(.replace)
-                    }
-                    .keyboardShortcut("f", modifiers: [.command, .option])
-                    .disabled(manager?.canReplace != true)
-
-                    Button(String(localized: "Find Next", table: "Interface")) {
-                        manager?.performFindAction(.next)
-                    }
-                    .keyboardShortcut("g", modifiers: .command)
-
-                    Button(String(localized: "Find Previous", table: "Interface")) {
-                        manager?.performFindAction(.previous)
-                    }
-
-                    Button(String(localized: "Use Selection for Find", table: "Interface")) {
-                        manager?.performFindAction(.useSelection)
-                    }
-                    .keyboardShortcut("e", modifiers: .command)
-                }
-            } else {
-                Button(String(localized: "Find", table: "Interface")) {}
-                    .disabled(true)
+            Button(String(localized: "Find…", table: "Interface")) {
+                manager?.showFind()
             }
+            .keyboardShortcut("f", modifiers: .command)
+            .disabled(manager?.canFind != true)
         }
 
         // Frees ⌘P from the default Print item for the command palette.

@@ -23,7 +23,8 @@ CSV 不复用 Markdown 的 GFM 表格解析器，因为二者的字段、引号�
   不引入 `CodableCSV`、Markdown AST、第二套 CSV parser／encoder 或可写单元格模型。
   Parser 结果只是当前文本版本的不可变只读索引，源位置和显示排序次序分离；
   首条记录固定作为表头，所有解析结果和 UI 请求须绑定 FileTab 编辑代次。
-  `DelimitedTableIndex` 使用最多 16,384 个 UTF-16 码元识别分隔符，整表索引最多一百万字段；
+  `DelimitedTableIndex` 以 16,384 个 UTF-16 码元为分隔符采样预算；不足两条完整逻辑记录时在解析容量内延伸至两条或文件结束。
+  整表索引最多一百万字段；
   超限保留可辨认记录和源位置，不放宽 FileTab 的 32 MiB 原始字节读取上限。
   `FileTab.delimitedSnapshot` 使用 Markdown 已有的文本请求代次，并核对原字节能否往返。
 - 系统 AppKit `NSTableView`＋`NSScrollView` 呈现网格，复用原生行虚拟化、键盘及 AX；

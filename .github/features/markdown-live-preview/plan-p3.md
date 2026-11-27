@@ -292,18 +292,15 @@ PreviewResource 与 T2/T3 的路径和锚点结果。
 <a id="p3-t5"></a>
 ### P3-T5 原生预览查找、命中定位与菜单焦点
 
-**位置：** WorkspaceWindowModel.focusedPreviewFile/canFind/canReplace/performFindAction、
-EditorFind.swift、MarkdownFilePreview、MarkdownPreview、MarkdownSelectionText、
-MarkdownReaderCoordinates 与 MarkdownGlyphHit。
+**位置：** WorkspaceWindowModel.showFind、FindWidget、EditorFind.swift、
+MarkdownFilePreview、MarkdownPreview、MarkdownSelectionText、MarkdownReaderCoordinates 与 MarkdownGlyphHit。
 
-- 复用 Edit → Find 的 FindAction 和实际 Dock 表面判定：⌘F、⌘G／⇧⌘G、使用选区、Esc。
-  源码仍由 NSTextFinder 负责查找和替换；Markdown 预览只读，替换置灰，即使源码并排挂载也不回落。
-  SVG 等不支持的预览同样不应回落到源码（保留其现行真实能力），CSV／HTML／终端／Diff 按既有路由；
-  共享表面判定只做一处，不为 Markdown 添加另一个主菜单或快捷键监听。
-  FileTab 持有查找命令与查询状态，MarkdownPreview 持有实际结果、在途请求及字形坐标；
-  不镜像查询和结果，关闭阅读面取消对应查找。参考 HTML/CSV 已有原生按需浮层与主题，
-  不另建全局搜索服务。阅读器未挂载／仍解析中可显示准备状态，不能把 Find 发送至隐藏源文；
-  收起浮层仅在当前有效 Dock/窗口恢复原生焦点。
+- 接入当前[共享查找浮层](../../../docs/features/editor.md#查找与替换)：唯一系统 `⌘F`，
+  主动选区填入查询、Enter／Shift+Enter 或按钮导航、Esc 关闭。源码继续使用 TextKit 的共享查找实现；
+  Markdown 预览只读，不显示替换，也不回落至并排源码。SVG 等未接入的预览保持原有能力；
+  CSV／HTML／终端／Diff 保留各自后端。不新增主菜单、快捷键监听或全局搜索服务。
+  Markdown 阅读器按自身生命周期持有查询、结果、在途请求和字形坐标，不镜像可写状态。
+  未挂载／仍解析中可显示准备状态；关闭阅读面取消对应查找，仅在当前有效 Dock／窗口恢复原生焦点。
 - 复用 T1–T3 的真实可见内容和 MarkdownSelectionText.visible 语义遍历，
   构造当前查询所需的有界文本与实际映射；搜索全部已展开文档而非只搜 viewport。
   匹配可跨同一逻辑文字段的格式、链接、实体、软换行；不跨无关块、格或图像，
@@ -326,15 +323,15 @@ MarkdownReaderCoordinates 与 MarkdownGlyphHit。
   若主题选择改变 picture 候选或真实失败文字，则只因实际可见语义改变更新结果。
   空查询立即清除，不缓存整篇搜索文本直到标签关闭；首次打开/查询实际需要才准备，
   大文档使用后台查找并测内存，不能主线程先创建全篇副本再交后台。
-- **同任务清理**：替换 canFind/canReplace 依赖 tabID 与 showsFilePreview 的表面推断，
-  以当前实际表面一次判定命令目标；若共用现有表面判断即可解决，不新增分发表或协议。
+- **同任务清理**：沿用当前实际 Dock 表面判定，只由窗口打开查找，补齐 Markdown 阅读器；
+  导航、关闭归阅读器，不恢复旧窗口命令转发，不新增分发表、协议或替换许可的平行状态。
   搜索与复制复用真实语义遍历，删除被替换的重复抽取代码，
   不能为精简删除复制用的附件语义、选区或原有 HTML/CSV Find。
 - **验收 M07/M06/M08**：SwiftMarkdownSelectionTests、SwiftMarkdownLayoutTests、
   WindowOwnershipIntegrationTests、HTMLFilePreviewTests.testFindMenuTargetsReadOnlyHTMLPreviewRatherThanItsSource
   的现有宿主验证方式，以及 MarkdownPreviewUITests／MarkdownSelectionBoundaryUITests。
   先复现单独预览及并排预览 Find 均不可用；修复后确保并排不落回源码；检查匹配数、实际屏内高亮、真实第一响应者、
-  下一处和上一处、使用选区、折叠与展开、无匹配、IME 查询、实时编辑和双窗。
+  下一处和上一处、重复 `⌘F` 采集主动选区、折叠与展开、无匹配、IME 查询、实时编辑和双窗。
   回归全部真实可达 Find 路由，保存字节、Undo 和原生编辑状态不变。
 
 ## 阶段验收
@@ -495,13 +492,13 @@ MarkdownReaderCoordinates 与 MarkdownGlyphHit。
   图片／图表／公式从 loading 到成功或失败、资产 refresh 与折叠状态变化后也更新真正可见内容，
   不因纯主题／滚动重新扫描整个文档。屏外内容按可读语义检索，不为搜索主动下载或布局所有资源。
 - 当前第一／中／末个匹配、连续下一处／上一处及环绕、屏内和屏外高亮，
-  大量结果、查询清空、Escape、使用选区、普通复制／选区拖动／⌘A/⌘C、查找输入框中文 IME；
+  大量结果、查询清空、Escape、主动选区填入查询、普通复制／选区拖动／⌘A/⌘C、查找输入框中文 IME；
   选区和搜索高亮共存，命中位置不写入 source caret。
   源码／预览／companion、不同 Dock 与双窗、冷解析、查找中编辑／撤销／换主题／折叠／关闭、
-  终端／Diff／CSV／HTML／SVG／图片／媒体／Browser 的 Find 启用、替换、隐藏及使用选区路由。
+  终端／Diff／CSV／HTML／SVG／图片／媒体／Browser 的查找入口与各内容实际支持的局部操作。
 - 判据：匹配计数与阅读顺序来自独立可见文本预期，真实匹配字形在屏内；
-  使用当前实际焦点执行现有 FindAction 的全部六项（show/replace/hide/next/previous/useSelection）。
-  替换仅作用既有可编辑表面，查找输入框与阅读器／源码间不串操作，关闭查找不误清普通选择。
+  实际操作 `⌘F`（包括重复打开和主动选区）、查询输入、前后导航、关闭及可写表面的替换展开。
+  只读表面不显示替换，查找框与阅读器／源码间不串操作，关闭查找不误清普通选择。
   不用复制生成的替代文本冒充屏幕匹配，源正文、撤销栈与磁盘字节不因查询而改变。
 
 ### M08 实际运行环境与规模（各任务的受影响路径）

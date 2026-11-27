@@ -151,7 +151,7 @@ enum WorkspaceUITestSupport {
         }
     }
 
-    private static func selectASCIIInputSource() throws {
+    static func selectASCIIInputSource() throws {
         let current = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
         let abc = inputSource(id: "com.apple.keylayout.ABC")
         let us = inputSource(id: "com.apple.keylayout.US")

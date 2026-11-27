@@ -37,7 +37,7 @@ Makefile 通过构建参数选择正式版或开发版，不复制 App Target、
 需要隔离的 Bailey Dev 时，应使用 `make build:dev` 生成的开发版 App。
 
 正式版产物位于 `.build/DerivedData/Build/Products/{Debug,Release}/Bailey.app`；
-测试版位于 `.build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app`，
+测试版位于 `.build/DerivedData-Dev/Build/Products/{Debug,Release}/Bailey Dev.app`（默认 Debug），
 App 包名、菜单栏和 Dock 名称均为 **Bailey Dev**（`chiimagnus.bailey.dev`）。
 两者使用独立 DerivedData 和 Bundle ID，
 测试不替换 `/Applications/Bailey.app`。正式 Debug／Release 继续共用 `chiimagnus.bailey`；
@@ -48,7 +48,8 @@ App 包名、菜单栏和 Dock 名称均为 **Bailey Dev**（`chiimagnus.bailey.
 精简后使用原构建签名的证书重新签名并严格验签；Debug 和测试包保持原样。
 Xcode 的调试符号不进入 App；`make package` 将对应 dSYM 单独压缩供崩溃分析。
 
-宿主与完整 App UI 的测试边界见 [testing.md](testing.md#测试层次)。日常按受影响类定点执行；
+宿主与完整 App UI 的测试边界见 [testing.md](testing.md#测试层次)，优化构建测试见
+[性能与内存测量](testing.md#性能与内存测量)。日常按受影响类定点执行；
 `make test:ui` 不指定 `ONLY_TESTING` 时会运行整个 UI Target，留给本机阶段验收。
 本机完整 GUI 测试应使用已安装的 **Apple Development 签名**，不要强制 `SIGNING=adhoc`：
 本机实测 ad-hoc Runner 被 macOS 拒绝辅助功能自动化，开发签名的同一 Runner 则能够正常操作。

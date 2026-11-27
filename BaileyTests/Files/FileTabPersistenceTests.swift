@@ -3853,7 +3853,7 @@ final class NativeFileTabTests: XCTestCase {
         XCTAssertFalse(file.isDirty)
     }
 
-    func testNativeFindBarRoutesThroughMountedFileEditor() async throws {
+    func testFloatingFindSearchesAndReplacesThroughMountedNativeDocument() async throws {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + ".txt")
         try Data("first keyword\nsecond keyword\n".utf8).write(to: path)
@@ -3870,19 +3870,157 @@ final class NativeFileTabTests: XCTestCase {
         window.orderFront(nil)
         host.layoutSubtreeIfNeeded()
         let editor = try XCTUnwrap(mountedEditor(in: host))
-        let scroll = try XCTUnwrap(editor.enclosingScrollView)
-        XCTAssertTrue(editor.usesFindBar)
-        XCTAssertTrue(editor.isIncrementalSearchingEnabled)
+        XCTAssertFalse(editor.usesFindBar)
         XCTAssertTrue(window.makeFirstResponder(editor))
-        file.performFindAction(.show)
-        try await waitForFileTabState { (scroll as NSTextFinderBarContainer).isFindBarVisible }
-        file.performFindAction(.hide)
-        try await waitForFileTabState { !(scroll as NSTextFinderBarContainer).isFindBarVisible }
-        XCTAssertEqual(editor.string, "first keyword\nsecond keyword\n")
+        let find = file.textFind
+        let original = editor.string
+        editor.textSelection = NSRange(location: 6, length: 7)
+        file.textFind.present()
+        XCTAssertTrue(find.isPresented)
+        XCTAssertEqual(find.query, "keyword")
+        try await waitForFileTabState { find.total == 2 }
+        XCTAssertEqual(editor.textSelection, NSRange(location: 6, length: 7))
+        find.navigate(forward: true)
+        XCTAssertEqual(editor.textSelection, NSRange(location: 21, length: 7))
+        find.navigate(forward: false)
+        XCTAssertEqual(editor.textSelection, NSRange(location: 6, length: 7))
+        let previousFocus = find.focusRequest
+        file.textFind.present()
+        XCTAssertEqual(find.focusRequest, previousFocus + 1)
+        XCTAssertEqual(find.current, 0)
+        find.options.regex = true
+        find.query = "("
+        try await waitForFileTabState { find.invalidPattern }
+        XCTAssertEqual(find.total, 0)
+        find.query = "KEYWORD"
+        find.options.matchCase = true
+        try await waitForFileTabState { find.total == 0 && !find.invalidPattern }
+        find.options.matchCase = false
+        try await waitForFileTabState { find.total == 2 }
+        find.options.wholeWord = true
+        find.query = "key"
+        try await waitForFileTabState { find.total == 0 }
+        find.options.wholeWord = false
+        find.query = "(key)(word)"
+        try await waitForFileTabState { find.total == 2 }
+        file.textFind.present(replacing: true)
+        XCTAssertTrue(find.showsReplace)
+        find.replacement = "$2-$1"
+        find.replace(all: true)
+        let changed = "first word-key\nsecond word-key\n"
+        try await waitForFileTabState { file.text == changed }
+        XCTAssertEqual(editor.string, changed)
+        XCTAssertTrue(file.isDirty)
+        editor.undoManager?.undo()
+        XCTAssertEqual(file.text, original)
+        XCTAssertFalse(file.isDirty)
+        editor.undoManager?.redo()
+        XCTAssertEqual(file.text, changed)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), Data(changed.utf8))
+        file.textFind.dismiss()
+        XCTAssertFalse(find.isPresented)
+        XCTAssertNil(find.total)
         XCTAssertFalse(file.isDirty)
     }
 
-    func testNativeFindBarKeepsSelectedGutterAndTextRowsPixelAligned() async throws {
+    func testFindInSelectionPreservesCaseAndNeverExpandsToUnselectedText() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        let original = "prefix alpha ALPHA Alpha suffix alpha\noutside ALPHA\n"
+        try Data(original.utf8).write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        defer { file.retireContent() }
+        let host = NSHostingView(rootView: AnyView(FileViewerView(file: file)))
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        let selection = (original as NSString).range(of: "alpha ALPHA Alpha")
+        editor.textSelection = selection
+        file.textFind.present()
+        let find = file.textFind
+        XCTAssertEqual(find.selectionCandidate, selection)
+        find.query = "alpha"
+        find.toggleSelectionScope()
+        try await waitForFileTabState { find.total == 3 }
+        XCTAssertEqual(find.scope, selection)
+        file.textFind.present(replacing: true)
+        find.preserveCase = true
+        find.replacement = "beta"
+        find.replace(all: true)
+        let changed = "prefix beta BETA Beta suffix alpha\noutside ALPHA\n"
+        try await waitForFileTabState { file.text == changed }
+        try await waitForFileTabState { find.total != nil }
+        XCTAssertEqual(find.total, 0)
+        XCTAssertEqual(find.scope, (changed as NSString).range(of: "beta BETA Beta"))
+        find.query = "beta"
+        try await waitForFileTabState { find.total == 3 }
+        find.replacement = "gamma"
+        find.replace(all: true)
+        let final = "prefix gamma GAMMA Gamma suffix alpha\noutside ALPHA\n"
+        try await waitForFileTabState { file.text == final }
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), Data(final.utf8))
+        editor.undoManager?.undo()
+        XCTAssertEqual(file.text, changed)
+        editor.undoManager?.undo()
+        XCTAssertEqual(file.text, original)
+        editor.undoManager?.redo()
+        XCTAssertEqual(file.text, changed)
+        editor.undoManager?.redo()
+        XCTAssertEqual(file.text, final)
+        find.dismiss()
+        XCTAssertNil(find.scope)
+        XCTAssertNil(find.total)
+
+    }
+
+    func testFindScopeClosesWhenAnEditCrossesItsBoundary() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        let original = "prefix gamma GAMMA Gamma suffix gamma\n"
+        try Data(original.utf8).write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        defer { file.retireContent() }
+        let host = NSHostingView(rootView: AnyView(FileViewerView(file: file)))
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        let selected = (original as NSString).range(of: "gamma GAMMA Gamma")
+        editor.textSelection = selected
+        file.textFind.present()
+        let find = file.textFind
+        find.query = "gamma"
+        find.toggleSelectionScope()
+        try await waitForFileTabState { find.total == 3 }
+        XCTAssertEqual(find.scope, selected)
+        file.textFind.present(replacing: true)
+        find.replacement = "unintended"
+        editor.insertText("x", replacementRange: NSRange(location: selected.location - 1, length: 3))
+        XCTAssertFalse(find.isPresented)
+        XCTAssertNil(find.scope)
+        let afterBoundaryEdit = file.text
+        XCTAssertNotEqual(afterBoundaryEdit, original)
+        find.replace(all: true)
+        XCTAssertEqual(file.text, afterBoundaryEdit)
+        editor.undoManager?.undo()
+        XCTAssertEqual(file.text, original)
+        XCTAssertEqual(try Data(contentsOf: path), Data(original.utf8))
+    }
+
+    func testFloatingFindDoesNotChangeViewportOrGutterAlignment() async throws {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + ".txt")
         let original = String(repeating: "keyword visible 中文\n", count: 35)
@@ -3914,6 +4052,13 @@ final class NativeFileTabTests: XCTestCase {
         func verify(_ stage: String) throws {
             host.layoutSubtreeIfNeeded()
             scroll.layoutSubtreeIfNeeded()
+            // A SwiftUI update reapplies the editor theme. Set the synthetic
+            // diagnostic palette after layout, before sampling the actual rows.
+            editor.backgroundColor = .black
+            scroll.backgroundColor = .black
+            gutter.backgroundColor = .black
+            editor.selectedLineHighlightColor = highlight
+            gutter.selectedLineHighlightColor = highlight
             editor.needsDisplay = true
             gutter.needsDisplay = true
             window.displayIfNeeded()
@@ -3939,110 +4084,45 @@ final class NativeFileTabTests: XCTestCase {
         }
 
         try verify("before find")
+        let clip = scroll.contentView
+        let initialInsets = clip.contentInsets
+        let initialBounds = clip.bounds
         XCTAssertTrue(window.makeFirstResponder(editor))
-        file.performFindAction(.show)
-        try await waitForFileTabState {
+        func checkViewport(_ stage: String, expected: CGRect) throws {
+            host.layoutSubtreeIfNeeded()
             scroll.layoutSubtreeIfNeeded()
-            return (scroll as NSTextFinderBarContainer).isFindBarVisible
-                && scroll.contentView.contentInsets.top > 0
+            XCTAssertEqual(clip.contentInsets.top, initialInsets.top, accuracy: 0.5, stage)
+            XCTAssertEqual(clip.bounds.minY, expected.minY, accuracy: 1, stage)
+            XCTAssertEqual(clip.bounds.height, expected.height, accuracy: 1, stage)
+            try verify(stage)
         }
-        let findHeight = try XCTUnwrap(scroll.findBarView).bounds.height
-        XCTAssertEqual(scroll.contentView.contentInsets.top, findHeight, accuracy: 0.5)
-        XCTAssertEqual(scroll.contentView.bounds.origin.y, -findHeight, accuracy: 1)
-        try verify("find bar shown")
-        // Switching directly between Find and Replace changes overlay height
-        // without hiding the find bar or changing the current document.
-        file.performFindAction(.replace)
-        try await waitForFileTabState {
-            scroll.layoutSubtreeIfNeeded()
-            return (scroll.findBarView?.bounds.height ?? 0) > findHeight
-        }
-        let expandedHeight = try XCTUnwrap(scroll.findBarView).bounds.height
-        XCTAssertEqual(scroll.contentView.bounds.origin.y, -expandedHeight, accuracy: 1)
-        try verify("replace expanded in place")
-        file.performFindAction(.show)
-        scroll.layoutSubtreeIfNeeded()
-        let heightAfterShow = try XCTUnwrap(scroll.findBarView).bounds.height
-        XCTAssertTrue((scroll as NSTextFinderBarContainer).isFindBarVisible)
-        XCTAssertEqual(scroll.contentView.bounds.origin.y, -heightAfterShow, accuracy: 1)
-        try verify("find command during replace")
-        file.performFindAction(.hide)
-        try await waitForFileTabState {
-            scroll.layoutSubtreeIfNeeded()
-            return !(scroll as NSTextFinderBarContainer).isFindBarVisible
-                && scroll.contentView.contentInsets.top == 0
-        }
-        XCTAssertEqual(scroll.contentView.bounds.origin.y, 0, accuracy: 1)
-        try verify("find bar hidden")
+        file.textFind.present()
+        try await waitForFileTabState { file.textFind.isPresented }
+        try checkViewport("find shown", expected: initialBounds)
+        file.textFind.present(replacing: true)
+        try await waitForFileTabState { file.textFind.showsReplace }
+        try checkViewport("replace expanded", expected: initialBounds)
+        file.textFind.dismiss()
+        try checkViewport("find hidden", expected: initialBounds)
 
-        // Repeat with a previously scrolled document: neither opening nor
-        // dismissing Find may jump the reader to a different text row.
         let middleY: CGFloat = 80
         let lineUnits = ("keyword visible 中文\n" as NSString).length
         editor.textSelection = NSRange(location: lineUnits * 10, length: 0)
-        XCTAssertTrue(window.makeFirstResponder(editor))
-        scroll.contentView.setBoundsOrigin(NSPoint(x: 0, y: middleY))
-        scroll.reflectScrolledClipView(scroll.contentView)
-        try verify("middle before find")
-        file.performFindAction(.show)
-        try await waitForFileTabState {
-            scroll.layoutSubtreeIfNeeded()
-            return (scroll as NSTextFinderBarContainer).isFindBarVisible
-                && scroll.contentView.contentInsets.top > 0
-        }
-        XCTAssertEqual(scroll.contentView.bounds.origin.y, middleY - findHeight, accuracy: 1)
-        XCTAssertEqual(file.editorState.scrollY ?? .nan, Double(middleY), accuracy: 1,
-            "Find must not alter the scroll position persisted for session restoration")
-        try verify("middle find shown")
+        clip.setBoundsOrigin(NSPoint(x: 0, y: middleY))
+        scroll.reflectScrolledClipView(clip)
+        let middle = clip.bounds
+        file.textFind.present()
+        try checkViewport("middle find shown", expected: middle)
+        XCTAssertEqual(file.editorState.scrollY ?? .nan, Double(middleY), accuracy: 1)
         window.setContentSize(NSSize(width: 620, height: 380))
         host.layoutSubtreeIfNeeded()
         scroll.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(50))
-        XCTAssertEqual(scroll.contentView.bounds.origin.y, middleY - findHeight, accuracy: 1,
-            "Resizing a window while Find is open must keep the same reading position")
-        try verify("middle find after resize")
-        file.performFindAction(.hide)
-        try await waitForFileTabState {
-            scroll.layoutSubtreeIfNeeded()
-            return !(scroll as NSTextFinderBarContainer).isFindBarVisible
-                && scroll.contentView.contentInsets.top == 0
-        }
-        XCTAssertEqual(scroll.contentView.bounds.origin.y, middleY, accuracy: 1)
-        XCTAssertEqual(file.editorState.scrollY ?? .nan, Double(middleY), accuracy: 1)
-        try verify("middle find hidden")
-
-        XCTAssertTrue(window.makeFirstResponder(editor))
-        file.performFindAction(.replace)
-        try await waitForFileTabState {
-            scroll.layoutSubtreeIfNeeded()
-            return (scroll as NSTextFinderBarContainer).isFindBarVisible
-                && scroll.contentView.contentInsets.top > 0
-        }
-        let replaceHeight = try XCTUnwrap(scroll.findBarView).bounds.height
-        XCTAssertGreaterThanOrEqual(replaceHeight, findHeight)
-        XCTAssertEqual(scroll.contentView.bounds.origin.y, middleY - replaceHeight, accuracy: 1)
-        try verify("find replace shown")
-        file.performFindAction(.hide)
-        try await waitForFileTabState {
-            scroll.layoutSubtreeIfNeeded()
-            return !(scroll as NSTextFinderBarContainer).isFindBarVisible
-                && scroll.contentView.contentInsets.top == 0
-        }
-        XCTAssertEqual(scroll.contentView.bounds.origin.y, middleY, accuracy: 1)
-        try verify("find replace hidden")
-
-        XCTAssertTrue(window.makeFirstResponder(editor))
-        file.performFindAction(.show)
-        try await waitForFileTabState {
-            scroll.layoutSubtreeIfNeeded()
-            return (scroll as NSTextFinderBarContainer).isFindBarVisible
-                && scroll.contentView.contentInsets.top > 0
-        }
-        scroll.contentView.setBoundsOrigin(NSPoint(x: 0, y: 32))
-        scroll.reflectScrolledClipView(scroll.contentView)
-        XCTAssertEqual(file.editorState.scrollY ?? .nan, Double(32 + findHeight), accuracy: 1)
-        try verify("user scrolls while find shown")
-        let offsetBeforeDockMove = scroll.contentView.bounds.origin
+        XCTAssertEqual(clip.bounds.minY, middleY, accuracy: 1)
+        try verify("middle find resized")
+        clip.setBoundsOrigin(NSPoint(x: 0, y: 32))
+        scroll.reflectScrolledClipView(clip)
+        XCTAssertEqual(file.editorState.scrollY ?? .nan, 32, accuracy: 1)
         host.rootView = AnyView(Color.clear)
         try await waitForFileTabState {
             host.layoutSubtreeIfNeeded()
@@ -4054,29 +4134,11 @@ final class NativeFileTabTests: XCTestCase {
             return self.mountedEditor(in: host) === editor
         }
         scroll.layoutSubtreeIfNeeded()
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertEqual(scroll.contentView.bounds.origin.y, offsetBeforeDockMove.y, accuracy: 1,
-            "Dock reattachment with Find active must keep the reading position")
-        XCTAssertTrue((scroll as NSTextFinderBarContainer).isFindBarVisible)
-        // Remounting reapplies the user's theme, which replaces the synthetic
-        // bright-red diagnostic palette used by this test before detachment.
-        XCTAssertEqual(editor.backgroundColor, gutter.backgroundColor)
-        XCTAssertEqual(editor.selectedLineHighlightColor, gutter.selectedLineHighlightColor)
-        editor.backgroundColor = .black
-        gutter.backgroundColor = .black
-        editor.selectedLineHighlightColor = highlight
-        gutter.selectedLineHighlightColor = highlight
-        try verify("find after dock reattachment")
-        file.performFindAction(.hide)
-        try await waitForFileTabState {
-            scroll.layoutSubtreeIfNeeded()
-            return !(scroll as NSTextFinderBarContainer).isFindBarVisible
-                && scroll.contentView.contentInsets.top == 0
-        }
-        XCTAssertEqual(scroll.contentView.bounds.origin.y, 32 + findHeight, accuracy: 1,
-            "Find dismissal must preserve user scrolling performed while the bar was open")
-        XCTAssertEqual(file.editorState.scrollY ?? .nan, Double(32 + findHeight), accuracy: 1)
-        try verify("find hidden after user scroll")
+        XCTAssertTrue(file.textFind.isPresented)
+        XCTAssertEqual(clip.bounds.minY, 32, accuracy: 1)
+        file.textFind.dismiss()
+        XCTAssertEqual(clip.bounds.minY, 32, accuracy: 1)
+        XCTAssertEqual(file.editorState.scrollY ?? .nan, 32, accuracy: 1)
         XCTAssertEqual(try Data(contentsOf: path), Data(original.utf8))
         XCTAssertFalse(file.isDirty)
     }
@@ -4450,26 +4512,37 @@ final class NativeFileTabTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(NSMaxRange(range), position)
         }
         print("P2_FILETAB_32M_PHASE navigation17_ms=\((CFAbsoluteTimeGetCurrent() - navigationStarted) * 1_000)")
-        let findStarted = CFAbsoluteTimeGetCurrent()
-        XCTAssertTrue(editor.usesFindBar)
-        XCTAssertTrue(window.makeFirstResponder(editor))
-        file.performFindAction(.show)
         let scroll = try XCTUnwrap(editor.enclosingScrollView)
-        try await waitForFileTabState {
-            (scroll as NSTextFinderBarContainer).isFindBarVisible
+        let findStarted = CFAbsoluteTimeGetCurrent()
+        XCTAssertFalse(editor.usesFindBar)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        file.textFind.present()
+        try await waitForFileTabState { file.textFind.isPresented }
+        let find = file.textFind
+        let expectedMatches = (baselineBytes / row.utf8.count) * 32
+        find.query = "abc_DEF01"
+        let findDeadline = ContinuousClock.now.advanced(by: .seconds(60))
+        while find.total == nil, ContinuousClock.now < findDeadline {
+            try await Task.sleep(for: .milliseconds(10))
         }
-        let findHeight = scroll.findBarView?.bounds.height ?? 0
-        file.performFindAction(.replace)
-        try await waitForFileTabState {
-            (scroll as NSTextFinderBarContainer).isFindBarVisible
-        }
-        XCTAssertGreaterThanOrEqual(scroll.findBarView?.bounds.height ?? 0, findHeight)
-        file.performFindAction(.hide)
-        try await waitForFileTabState {
-            !(scroll as NSTextFinderBarContainer).isFindBarVisible
-        }
+        XCTAssertEqual(find.total, expectedMatches)
+        let firstHit = (source as NSString).range(of: find.query)
+        let lastHit = (source as NSString).range(of: find.query, options: .backwards)
+        XCTAssertEqual(Array(find.visibleMatches(in: lastHit)), [lastHit])
+        editor.textSelection = lastHit
+        find.navigate(forward: true)
+        XCTAssertEqual(editor.textSelection, firstHit)
+        XCTAssertEqual(find.current, 0)
+        find.navigate(forward: false)
+        XCTAssertEqual(editor.textSelection, lastHit)
+        XCTAssertEqual(find.current, expectedMatches - 1)
+        print("P2_FILETAB_32M_FIND matches=\(expectedMatches) duration_ms=\((CFAbsoluteTimeGetCurrent() - findStarted) * 1_000)")
+        file.textFind.present(replacing: true)
+        XCTAssertTrue(find.showsReplace)
+        file.textFind.dismiss()
+        XCTAssertFalse(find.isPresented)
+        XCTAssertTrue(find.visibleMatches(in: lastHit).isEmpty)
         XCTAssertFalse(file.isDirty)
-        print("P2_FILETAB_32M_PHASE find_ms=\((CFAbsoluteTimeGetCurrent() - findStarted) * 1_000)")
         let multiStarted = CFAbsoluteTimeGetCurrent()
 
         // Two disjoint real selections must keep one undo transaction.

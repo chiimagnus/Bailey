@@ -1,6 +1,16 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%@ of %lld" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ / %2$lld"
+          }
+        }
+      }
+    },
     "%@, %@" : {
       "localizations" : {
         "zh-Hans" : {
@@ -57,6 +67,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "标注图片"
+          }
+        }
+      }
+    },
+    "Find in Selection" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在选区中查找"
           }
         }
       }
@@ -551,6 +571,16 @@
         }
       }
     },
+    "Toggle Replace" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展开或收起替换"
+          }
+        }
+      }
+    },
     "Transparent" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1021,6 +1051,16 @@
         }
       }
     },
+    "Use Regular Expression" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用正则表达式"
+          }
+        }
+      }
+    },
     "Visible Records" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1051,16 +1091,6 @@
         }
       }
     },
-    "Replace With" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "替换为"
-          }
-        }
-      }
-    },
     "Replace In" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1087,6 +1117,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "仅包括当前显示列。"
+          }
+        }
+      }
+    },
+    "Invalid regular expression" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无效的正则表达式"
+          }
+        }
+      }
+    },
+    "Match Case" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "区分大小写"
+          }
+        }
+      }
+    },
+    "Match Whole Word" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全词匹配"
           }
         }
       }
@@ -1177,6 +1237,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "警告"
+          }
+        }
+      }
+    },
+    "Preserve Case" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保留大小写"
           }
         }
       }
