@@ -133,13 +133,12 @@ struct ToolPanelView: View {
         CGFloat(settings.panelFontSize / AppSettings.defaultPanelFontSize)
     }
 
-    /// Every terminal in the selected project can change the same repository.
-    /// Watching only these counters avoids reacting to prompt/input lifecycle
-    /// updates while still catching commands completed in an unfocused pane.
+    /// Git refresh belongs to the window. Only Files needs this observation.
     private var commandCompletionSequences: [UUID: UInt64] {
-        Dictionary(uniqueKeysWithValues:
+        guard panel == .files else { return [:] }
+        return Dictionary(uniqueKeysWithValues:
             manager.selectedProject?.sessions.map {
-                ($0.id, $0.commandLifecycle.completionSequence)
+                ($0.id, $0.commandCompletionSequence)
             } ?? []
         )
     }

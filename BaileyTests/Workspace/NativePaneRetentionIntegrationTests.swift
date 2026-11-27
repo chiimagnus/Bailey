@@ -64,15 +64,15 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         }
         let previous = try XCTUnwrap(terminal.surface.superview as? TerminalContainerView)
         XCTAssertNotNil(terminal.surface.onBecomeFirstResponder)
-        XCTAssertNotNil(terminal.surface.openMenuTarget.onNewBrowserTab)
+        XCTAssertNotNil(terminal.surface.onNewBrowserTab)
         let parking = TerminalParkingContainerView(frame: .zero)
         container.addSubview(parking)
         parking.mount([terminal])
         XCTAssertTrue(terminal.surface.superview === parking)
         XCTAssertTrue(terminal.surface.window === window)
         XCTAssertNil(terminal.surface.onBecomeFirstResponder)
-        XCTAssertNil(terminal.surface.openMenuTarget.onNewBrowserTab)
-        XCTAssertNil(terminal.surface.openMenuTarget.onNewFileTab)
+        XCTAssertNil(terminal.surface.onNewBrowserTab)
+        XCTAssertNil(terminal.surface.onNewFileTab)
         TerminalHostView.dismantleNSView(previous, coordinator: TerminalHostView.Coordinator())
         XCTAssertTrue(terminal.surface.superview === parking)
     }
@@ -2149,15 +2149,15 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertEqual(project.name, "fallback")
 
         let commandChanged = expectation(description: "Real command completion observation")
-        withObservationTracking({ _ = terminal.commandLifecycle.completionSequence }) {
+        withObservationTracking({ _ = terminal.commandCompletionSequence }) {
             commandChanged.fulfill()
         }
-        let previous = terminal.commandLifecycle.completionSequence
-        terminal.terminalDidReportShellIntegration(
-            .commandFinished(exitCode: 0, durationNanos: 1_000_000)
-        )
+        let previous = terminal.commandCompletionSequence
+        surface.terminalDidFinishCommand(exitCode: 0, durationNanos: 1_000_000)
         await fulfillment(of: [commandChanged], timeout: 2)
-        XCTAssertEqual(terminal.commandLifecycle.completionSequence, previous + 1)
+        XCTAssertEqual(terminal.commandCompletionSequence, previous + 1)
+        surface.terminalDidFinishCommand(exitCode: 0, durationNanos: 1_000_000)
+        XCTAssertEqual(terminal.commandCompletionSequence, previous + 2)
 
         let findChanged = expectation(description: "Find focus request observation")
         withObservationTracking({ _ = terminal.find.focusRequest }) {
@@ -2198,6 +2198,8 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
+        let sentinel = directory.appendingPathComponent("local-only.txt")
+        try Data("local".utf8).write(to: sentinel)
         let terminal = TerminalSession(initialDirectory: directory.path, launchCommand: "exec /bin/sh -i")
         defer { terminal.terminate() }
         let tab = PaneTab(content: .session(terminal))
@@ -2214,6 +2216,9 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         try await settle { terminal.shellPid != nil }
         XCTAssertTrue(terminal.acceptsLocalFileDrop)
+        guard case .file? = terminal.terminalLinkTarget(for: sentinel.path) else {
+            return XCTFail("Local path must resolve before SSH")
+        }
 
         // An SSH client that bypasses Bailey's helper keeps location == .local.
         // ProxyCommand sleeps over local pipes only: no network, credentials,
@@ -2242,6 +2247,8 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertNil(terminal.location.remoteConnection)
         XCTAssertFalse(terminal.acceptsLocalFileDrop,
                        "A foreground ssh is remote input regardless of whether it replaced the root shell")
+        XCTAssertNil(terminal.terminalLinkTarget(for: sentinel.path))
+        XCTAssertNil(terminal.terminalLinkTarget(for: sentinel.absoluteString))
     }
 
     func testTerminalKeepsSameShellAcrossParkingAndRemount() async throws {

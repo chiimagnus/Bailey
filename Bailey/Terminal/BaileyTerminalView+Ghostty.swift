@@ -2,8 +2,7 @@ import AppKit
 import GhosttyTerminal
 import GhosttyTheme
 
-/// Starts Ghostty, configures its renderer and forwards terminal events
-/// into Bailey's session model through ``TerminalBackendEvents``.
+/// Starts Ghostty, configures its renderer and forwards session events.
 extension BaileyTerminalView {
     // MARK: - Lifecycle
 
@@ -158,31 +157,31 @@ extension BaileyTerminalView {
 
 extension BaileyTerminalView: TerminalSurfaceTitleDelegate {
     func terminalDidChangeTitle(_ title: String) {
-        events?.terminalDidChangeTitle(title)
+        ownerSession?.terminalDidChangeTitle(title)
     }
 }
 
 extension BaileyTerminalView: TerminalSurfacePwdDelegate {
     func terminalDidChangeWorkingDirectory(_ path: String) {
-        events?.terminalDidChangeWorkingDirectory(path)
+        ownerSession?.terminalDidChangeWorkingDirectory(path)
     }
 }
 
 extension BaileyTerminalView: TerminalSurfaceBellDelegate {
     func terminalDidRingBell() {
-        events?.terminalDidRingBell()
+        ownerSession?.terminalDidRingBell()
     }
 }
 
 extension BaileyTerminalView: TerminalSurfaceCloseDelegate {
     func terminalDidClose(processAlive: Bool) {
-        events?.terminalDidClose(processAlive: processAlive)
+        ownerSession?.terminalDidClose(processAlive: processAlive)
     }
 }
 
 extension BaileyTerminalView: TerminalSurfaceDesktopNotificationDelegate {
     func terminalDidRequestDesktopNotification(title: String, body: String) {
-        events?.terminalDidRequestDesktopNotification(title: title, body: body)
+        ownerSession?.terminalDidRequestDesktopNotification(title: title, body: body)
     }
 }
 
@@ -196,9 +195,7 @@ extension BaileyTerminalView: TerminalSurfaceProgressReportDelegate {
 
 extension BaileyTerminalView: TerminalSurfaceCommandFinishedDelegate {
     func terminalDidFinishCommand(exitCode: Int?, durationNanos: UInt64) {
-        events?.terminalDidReportShellIntegration(
-            .commandFinished(exitCode: exitCode, durationNanos: durationNanos)
-        )
+        ownerSession?.terminalDidFinishCommand()
     }
 }
 
@@ -207,7 +204,7 @@ extension BaileyTerminalView: TerminalSurfaceOpenURLDelegate {
         // A history export borrows this callback as its synchronous return
         // channel for a file path; that one is not a URL to open.
         if consumeHistoryExportURL(url, kind: kind) { return }
-        events?.terminalDidRequestOpenURL(url)
+        ownerSession?.terminalDidRequestOpenURL(url)
     }
 }
 
@@ -225,25 +222,25 @@ extension BaileyTerminalView: TerminalSurfaceScrollbarDelegate {
             topRow: scrollbar.offset
         )
         lastScroll = position
-        events?.terminalDidScroll(position)
+        ownerSession?.terminalDidScroll(position)
     }
 }
 
 extension BaileyTerminalView: TerminalSurfaceSearchDelegate {
     func terminalDidStartSearch(needle: String) {
-        events?.terminalDidBeginFind(needle: needle)
+        ownerSession?.find.started(needle: needle)
     }
 
     func terminalDidEndSearch() {
-        events?.terminalDidEndFind()
+        ownerSession?.find.ended()
     }
 
     func terminalDidUpdateSearchTotal(_ total: Int?) {
-        events?.terminalDidUpdateFindTotal(total)
+        ownerSession?.find.update(total: total)
     }
 
     func terminalDidUpdateSearchSelected(_ selected: Int?) {
-        events?.terminalDidUpdateFindSelected(selected)
+        ownerSession?.find.update(selected: selected)
     }
 }
 
@@ -251,12 +248,13 @@ extension BaileyTerminalView: TerminalSurfaceClipboardConfirmationDelegate {
     func terminalDidRequestClipboardConfirmation(
         _ request: TerminalClipboardConfirmationRequest
     ) {
+        guard let ownerSession else { request.deny(); return }
         let kind: TerminalClipboardRequest.Kind
         switch request.kind {
         case .unsafePaste: kind = .unsafePaste
         case .osc52Read: kind = .programRead
         }
-        events?.terminalDidRequestClipboardConfirmation(
+        ownerSession.terminalDidRequestClipboardConfirmation(
             TerminalClipboardRequest(kind: kind, contents: request.contents) { approved in
                 if approved {
                     request.approve()

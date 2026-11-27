@@ -1471,7 +1471,7 @@ final class WorkspaceWindowModel {
     /// AppKit ancestry before deciding whether palette dismissal can restore
     /// the page's keyboard focus.
     private func isStableWorkspaceResponder(_ responder: NSResponder) -> Bool {
-        if responder is any TerminalBackendSurface || responder is FocusReportingTextView
+        if responder is BaileyTerminalView || responder is FocusReportingTextView
             || responder is DiffTextView {
             return true
         }

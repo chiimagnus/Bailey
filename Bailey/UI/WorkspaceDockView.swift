@@ -882,7 +882,12 @@ struct DockTabGroupView: View {
                         guard manager.selectedProject === project else { return }
                         manager.newBrowserTab(initialURL: $0)
                     },
-                    onNewFileTab: { manager.openFile($0) },
+                    onNewFileTab: {
+                        guard manager.selectedProject === project,
+                              project.dock.root.group(id: group.id)?.selected == .tab(tab.id)
+                        else { return }
+                        project.openLocalFile($0, inGroup: group.id)
+                    },
                     resourceDirectory: resourceDirectory(for: tab),
                     rendersOnlyPreview: active == .filePreview(id),
                     onMarkdownLink: { file, url in

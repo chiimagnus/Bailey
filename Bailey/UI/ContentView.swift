@@ -15,7 +15,7 @@ struct ContentView: View {
     private var commandCompletionSequences: [UUID: UInt64] {
         Dictionary(uniqueKeysWithValues:
             manager.selectedProject?.sessions.map {
-                ($0.id, $0.commandLifecycle.completionSequence)
+                ($0.id, $0.commandCompletionSequence)
             } ?? []
         )
     }

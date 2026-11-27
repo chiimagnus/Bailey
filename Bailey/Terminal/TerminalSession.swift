@@ -1,4 +1,5 @@
 import AppKit
+import GhosttyTerminal
 import Darwin
 import Foundation
 import Observation
@@ -17,8 +18,7 @@ extension TerminalSession {
 /// command instead. SwiftUI only reparents the same surface, so
 /// PTY state, selection, and scrollback survive tab and docking changes.
 ///
-/// The surface reports its lifecycle and input events through
-/// ``TerminalBackendEvents`` so session logic stays independent of rendering.
+/// The surface reports lifecycle and input events to its owning session.
 @MainActor
 @Observable
 final class TerminalSession: NSObject, nonisolated Identifiable {
@@ -30,22 +30,19 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
     }
     @ObservationIgnored var onSnapshotChange: (() -> Void)?
     var hasExited = false
-    private(set) var commandLifecycle = TerminalCommandLifecycle()
+    private(set) var commandCompletionSequence: UInt64 = 0
     /// Where this session's workspace tools look. Set by Bailey's `ssh` helper
     /// through the private authenticated handoff, never guessed from the foreground
     /// process: an ssh Bailey did not front cannot be followed.
     var location: WorkspaceLocation = .local
     private var initialWorkspace: PanelContext?
     private let isRemoteLaunch: Bool
-    /// A fixed-SSH project has a remote launch target even before the private
-    /// handoff has populated location. A dynamic SSH session becomes local
-    /// again only after its actual ssh process has exited. A manually launched
-    /// foreground ssh is remote input too, even without Bailey's handoff.
+    /// Local file input and links must describe this Mac, never an SSH peer.
     var acceptsLocalFileDrop: Bool {
         !isRemoteLaunch && location.remoteConnection == nil
-            && !hasUnmanagedSSH && !hasExited
+            && !hasUnmanagedSSH && !hasExited && !isTerminating
     }
-    let surface: any TerminalBackendSurface
+    let surface: BaileyTerminalView
     let overlayScrollbar = OverlayScrollbarView()
     /// Find-in-terminal state for this session's pane (⌘F).
     let find: TerminalFind
@@ -61,7 +58,6 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
     @ObservationIgnored private var remoteMonitor: Task<Void, Never>?
     @ObservationIgnored private var lastHistorySnapshot: String?
     @ObservationIgnored private var isTerminating = false
-    @ObservationIgnored private var commandExecutionStartedAtNanos: UInt64?
     init(
         initialDirectory: String? = nil,
         restoredHistory: String? = nil,
@@ -103,7 +99,7 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         lastHistorySnapshot = restoredHistory
         super.init()
 
-        surface.events = self
+        surface.ownerSession = self
         installOverlayScrollbar()
         applyTheme()
     }
@@ -127,9 +123,7 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         surface.applyAppearance()
     }
 
-    /// Stops the whole PTY job before releasing the surface. The backend's
-    /// teardown owns the final reap; sending HUP first gives shells the same
-    /// close signal they received before the backend migration.
+    /// Sends HUP to the PTY job before Ghostty releases and reaps it.
     func terminate() {
         guard !hasExited, !isTerminating else { return }
         isTerminating = true
@@ -145,8 +139,8 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         // These callbacks originate on PanelContentView and capture this session.
         surface.setSurfaceVisible(false)
         surface.onBecomeFirstResponder = nil
-        surface.openMenuTarget.onNewBrowserTab = nil
-        surface.openMenuTarget.onNewFileTab = nil
+        surface.onNewBrowserTab = nil
+        surface.onNewFileTab = nil
 
         if processAlive {
             _ = shellPid // Cache it before `hasExited` changes.
@@ -608,7 +602,7 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
 
 // MARK: - Terminal surface callbacks
 
-extension TerminalSession: TerminalBackendEvents {
+extension TerminalSession {
     func terminalDidChangeTitle(_ title: String) {
         guard !title.isEmpty else { return }
         self.title = title
@@ -632,28 +626,8 @@ extension TerminalSession: TerminalBackendEvents {
         }
     }
 
-    func terminalDidReportShellIntegration(_ event: TerminalShellIntegrationEvent) {
-        var lifecycle = commandLifecycle
-        switch event {
-        case .promptStart:
-            lifecycle.phase = .prompt
-        case .commandStart:
-            lifecycle.phase = .input
-        case .commandExecuting:
-            lifecycle.phase = .executing
-            commandExecutionStartedAtNanos = DispatchTime.now().uptimeNanoseconds
-        case let .commandFinished(exitCode, reportedDuration):
-            let measuredDuration = commandExecutionStartedAtNanos.flatMap { started in
-                let now = DispatchTime.now().uptimeNanoseconds
-                return now >= started ? now - started : nil
-            }
-            lifecycle.phase = .idle
-            lifecycle.lastExitCode = exitCode
-            lifecycle.lastDurationNanos = reportedDuration ?? measuredDuration
-            lifecycle.completionSequence &+= 1
-            commandExecutionStartedAtNanos = nil
-        }
-        commandLifecycle = lifecycle
+    func terminalDidFinishCommand() {
+        commandCompletionSequence &+= 1
     }
 
     func terminalDidClose(processAlive: Bool) {
@@ -702,9 +676,12 @@ extension TerminalSession: TerminalBackendEvents {
     /// append `:line[:column]`, so try the literal path before peeling those
     /// numeric locations off.
     private func existingFileURL(from value: String) -> URL? {
+        guard acceptsLocalFileDrop else { return nil }
         let candidate: URL
         if let url = URL(string: value), url.scheme != nil {
-            guard url.isFileURL else { return nil }
+            guard url.isFileURL, url.host == nil || url.host == "" || url.host == "localhost" else {
+                return nil
+            }
             candidate = url
         } else {
             let decoded = value.removingPercentEncoding ?? value
@@ -741,22 +718,6 @@ extension TerminalSession: TerminalBackendEvents {
             proportion: position.proportion,
             active: position.isScrollable
         )
-    }
-
-    func terminalDidBeginFind(needle: String) {
-        find.started(needle: needle)
-    }
-
-    func terminalDidEndFind() {
-        find.ended()
-    }
-
-    func terminalDidUpdateFindTotal(_ total: Int?) {
-        find.update(total: total)
-    }
-
-    func terminalDidUpdateFindSelected(_ selected: Int?) {
-        find.update(selected: selected)
     }
 
     func terminalDidRequestClipboardConfirmation(_ request: TerminalClipboardRequest) {

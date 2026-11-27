@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Darwin
 import XCTest
@@ -191,6 +192,60 @@ final class WorkspaceIdentityTests: XCTestCase {
         XCTAssertFalse(waiting.acceptsLocalFileDrop)
         waiting.location = .local
         XCTAssertFalse(waiting.acceptsLocalFileDrop, "A fixed SSH terminal never accepts a Mac path")
+    }
+
+    func testTerminalFileLinksNeverResolveRemotePathsOnMac() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("local only.swift")
+        try Data("local sentinel".utf8).write(to: file)
+        let local = TerminalSession(initialDirectory: root.path, launchCommand: "exec /bin/sh -i")
+        let fixed = Project(fallbackName: "SSH", layout: .init())
+        fixed.sshHost = "fixture-ssh"
+        fixed.customDirectory = root.path
+        let remote = fixed.newSession()
+        defer { local.terminate(); fixed.terminateAll() }
+
+        let values = [file.path, file.lastPathComponent, file.absoluteString, file.path + ":12:4"]
+        for value in values {
+            guard case .file(let target)? = local.terminalLinkTarget(for: value) else {
+                XCTFail("Local link should identify the existing file: " + value)
+                continue
+            }
+            XCTAssertEqual(target.path, file.path)
+            XCTAssertNil(remote.terminalLinkTarget(for: value), "Fixed SSH cannot open a Mac file: " + value)
+        }
+        let foreignFileURL = "file://fixture.invalid" + file.absoluteString.dropFirst("file://".count)
+        XCTAssertNil(local.terminalLinkTarget(for: foreignFileURL))
+        let menu = local.surface.contextMenu(linkTarget: local.terminalLinkTarget(for: file.path))
+        let action = try XCTUnwrap(menu.items.last)
+        let selector = try XCTUnwrap(action.action)
+        let project = Project(fallbackName: "Mac", layout: .init())
+        project.customDirectory = root.path
+        local.surface.onNewFileTab = { project.openLocalFile($0) }
+        let connection = connection()
+        local.location = .remote(connection)
+        XCTAssertTrue(NSApp.sendAction(selector, to: action.target, from: action))
+        XCTAssertTrue(project.tabs.isEmpty, "A menu opened before SSH cannot later open a Mac file")
+        for value in values { XCTAssertNil(local.terminalLinkTarget(for: value), value) }
+        connection.markDisconnected(reason: "fixture")
+        for value in values { XCTAssertNil(local.terminalLinkTarget(for: value), value) }
+        guard case .url(let website)? = remote.terminalLinkTarget(for: "https://example.invalid") else {
+            return XCTFail("Remote web links must remain usable")
+        }
+        XCTAssertEqual(website.host, "example.invalid")
+        local.location = .local
+        guard case .file? = local.terminalLinkTarget(for: file.path) else {
+            return XCTFail("Returning to the local shell must restore local file links")
+        }
+        XCTAssertTrue(NSApp.sendAction(selector, to: action.target, from: action))
+        guard case .file(let opened)? = project.selectedTab?.content else {
+            return XCTFail("The valid native menu action should open the Mac file")
+        }
+        XCTAssertNil(opened.workspaceIdentity)
+        XCTAssertEqual(opened.path, file.path)
+        XCTAssertEqual(try Data(contentsOf: file), Data("local sentinel".utf8))
     }
 
     func testProjectSSHAndWorkspaceCommandsUseTheSameScopedControlSocket() {

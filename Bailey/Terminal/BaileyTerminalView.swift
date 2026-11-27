@@ -5,17 +5,14 @@ import GhosttyTerminal
 /// Bailey's pane focus, context menu, effective application focus, and
 /// Finder/file-tree drop behavior.
 ///
-/// This is the only type in Bailey that knows libghostty exists. It owns the
-/// `TerminalController`, renders Bailey's settings into Ghostty's config, and
-/// translates Ghostty's delegate callbacks into ``TerminalBackendEvents`` —
-/// see `BaileyTerminalView+Ghostty.swift`.
-final class BaileyTerminalView: AppTerminalView, TerminalBackendSurface {
-    /// The session listening to this surface. Weak: the session owns the view.
-    weak var events: (any TerminalBackendEvents)?
+/// Owns the Ghostty controller and forwards its callbacks to the owning session.
+final class BaileyTerminalView: AppTerminalView {
+    weak var ownerSession: TerminalSession?
 
     /// Fired whenever direct interaction makes this pane the active one.
     var onBecomeFirstResponder: (() -> Void)?
-    let openMenuTarget = TerminalOpenMenuTarget()
+    var onNewBrowserTab: ((String?) -> Void)?
+    var onNewFileTab: ((String) -> Void)?
 
     /// Held strongly for the surface's lifetime; ``detach()`` drops it.
     var ghosttyController: TerminalController?
@@ -47,8 +44,6 @@ final class BaileyTerminalView: AppTerminalView, TerminalBackendSurface {
         start(launch: launch)
     }
 
-    // MARK: - TerminalBackendSurface
-
     override func setSurfaceVisible(_ visible: Bool) {
         isSurfaceVisible = visible
         super.setSurfaceVisible(visible)
@@ -64,14 +59,6 @@ final class BaileyTerminalView: AppTerminalView, TerminalBackendSurface {
         guard let lastScroll else { return }
         scrollToRow(UInt(clamping: lastScroll.row(atDragFraction: fraction)))
     }
-
-    func beginFind(_ needle: String) { search(needle) }
-
-    func endFind() { endSearch() }
-
-    func stepFind(forward: Bool) { navigateSearch(forward: forward) }
-
-    func findSelection() { searchSelection() }
 
     func exportScreenFile() -> String? {
         captureHistoryExportPath(action: "write_screen_file:open,vt")
@@ -256,10 +243,10 @@ final class BaileyTerminalView: AppTerminalView, TerminalBackendSurface {
 
     private func linkTarget(for event: NSEvent) -> TerminalLinkTarget? {
         guard event.modifierFlags.contains(.command), let hoveredLink else { return nil }
-        return events?.terminalLinkTarget(for: hoveredLink)
+        return ownerSession?.terminalLinkTarget(for: hoveredLink)
     }
 
-    private func contextMenu(linkTarget: TerminalLinkTarget?) -> NSMenu {
+    func contextMenu(linkTarget: TerminalLinkTarget?) -> NSMenu {
         let menu = NSMenu()
         menu.addItem(contextItem(String(localized: "Copy", table: "Terminal"), #selector(copy(_:))))
         menu.addItem(contextItem(String(localized: "Paste", table: "Terminal"), #selector(NSText.paste(_:))))
@@ -269,9 +256,15 @@ final class BaileyTerminalView: AppTerminalView, TerminalBackendSurface {
             menu.addItem(.separator())
             switch linkTarget {
             case .url(let url):
-                menu.addItem(openMenuTarget.browserMenuItem(initialURL: url.absoluteString))
+                let item = contextItem(String(localized: "New Browser Tab", table: "Terminal"),
+                                       #selector(newBrowserTab(_:)))
+                item.representedObject = url.absoluteString
+                menu.addItem(item)
             case .file(let url):
-                menu.addItem(openMenuTarget.fileMenuItem(path: url.path))
+                let item = contextItem(String(localized: "New File Tab", table: "Terminal"),
+                                       #selector(newFileTab(_:)))
+                item.representedObject = url
+                menu.addItem(item)
             }
         }
         return menu
@@ -281,6 +274,17 @@ final class BaileyTerminalView: AppTerminalView, TerminalBackendSurface {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
         return item
+    }
+
+    @objc private func newBrowserTab(_ sender: NSMenuItem) {
+        onNewBrowserTab?(sender.representedObject as? String)
+    }
+
+    @objc private func newFileTab(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL,
+              case .file(let current)? = ownerSession?.terminalLinkTarget(for: url.absoluteString),
+              current == url else { return }
+        onNewFileTab?(current.path)
     }
 
     // MARK: - File drops
@@ -304,7 +308,7 @@ final class BaileyTerminalView: AppTerminalView, TerminalBackendSurface {
     }
 
     private func fileDropText(_ sender: NSDraggingInfo) -> String? {
-        guard (events as? TerminalSession)?.acceptsLocalFileDrop == true,
+        guard ownerSession?.acceptsLocalFileDrop == true,
               let urls = fileURLs(sender) else { return nil }
         return Self.fileDropText(for: urls)
     }
@@ -497,43 +501,5 @@ final class BaileyTerminalProgressBarView: NSView {
 
     private func stopIndeterminateAnimation() {
         barLayer.removeAnimation(forKey: indeterminateAnimationKey)
-    }
-}
-
-final class TerminalOpenMenuTarget: NSObject {
-    var onNewBrowserTab: ((String?) -> Void)?
-    var onNewFileTab: ((String) -> Void)?
-
-    func browserMenuItem(initialURL: String) -> NSMenuItem {
-        let menuItem = item(
-            String(localized: "New Browser Tab", table: "Terminal"),
-            #selector(newBrowserTab(_:))
-        )
-        menuItem.representedObject = initialURL
-        return menuItem
-    }
-
-    func fileMenuItem(path: String) -> NSMenuItem {
-        let menuItem = item(
-            String(localized: "New File Tab", table: "Terminal"),
-            #selector(newFileTab(_:))
-        )
-        menuItem.representedObject = path
-        return menuItem
-    }
-
-    private func item(_ title: String, _ action: Selector) -> NSMenuItem {
-        let menuItem = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        menuItem.target = self
-        return menuItem
-    }
-
-    @objc private func newBrowserTab(_ sender: NSMenuItem) {
-        onNewBrowserTab?(sender.representedObject as? String)
-    }
-
-    @objc private func newFileTab(_ sender: NSMenuItem) {
-        guard let path = sender.representedObject as? String else { return }
-        onNewFileTab?(path)
     }
 }
