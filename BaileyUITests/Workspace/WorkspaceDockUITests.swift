@@ -497,6 +497,70 @@ final class WorkspaceDockUITests: XCTestCase {
         }
     }
 
+    func testTabCloseMenuReplacesCloseWhileOptionIsHeld() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("a.txt", text: "first\n")
+        let second = try fixture.file("b.txt", text: "second\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.matching(identifier: "main-AppWindow-1").firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 15))
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        for file in [first, second] {
+            let row = WorkspaceUITestSupport.fileRow(file, in: window)
+            XCTAssertTrue(row.waitForExistence(timeout: 15))
+            row.doubleClick()
+            XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: window).waitForExistence(timeout: 15))
+        }
+        let keep = WorkspaceUITestSupport.fileTab(first, in: window)
+        let other = WorkspaceUITestSupport.fileTab(second, in: window)
+        XCTAssertTrue(keep.isHittable)
+        XCTAssertTrue(other.isSelected)
+
+        keep.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
+        let menu = app.menus.containing(.menuItem, identifier: "Reveal in File Manager").firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 8))
+        let close = WorkspaceUITestSupport.menuItem("Close", in: menu)
+        let others = WorkspaceUITestSupport.menuItem("Close Others", in: menu)
+        let all = WorkspaceUITestSupport.menuItem("Close All", in: menu)
+        // AppKit exposes both alternate items through AX even though they
+        // occupy one visible row. Compare the actual pixels in that row.
+        XCTAssertTrue(close.exists && others.exists && all.exists)
+        XCTAssertFalse(menu.menuItems["Close Tabs to the Right"].exists)
+        let slot = close.frame
+        let allSlot = all.frame
+        XCTAssertEqual(others.frame.midY, slot.midY, accuracy: 2)
+        func capture(_ name: String) -> Data? {
+            let screenshot = close.screenshot()
+            let attachment = XCTAttachment(screenshot: screenshot)
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            guard let tiff = screenshot.image.tiffRepresentation,
+                  let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
+            return bitmap.representation(using: .png, properties: [:])
+        }
+        let normal = try XCTUnwrap(capture("Close"))
+        var alternate: Data?
+        XCUIElement.perform(withKeyModifiers: .option) {
+            XCTAssertEqual(others.frame.midY, slot.midY, accuracy: 2)
+            XCTAssertEqual(all.frame.midY, allSlot.midY, accuracy: 2)
+            alternate = capture("Option: Close Others")
+        }
+        let held = try XCTUnwrap(alternate)
+        XCTAssertNotEqual(held, normal, "Holding Option must repaint the native menu row")
+        let restored = try XCTUnwrap(capture("Release Option: Close"))
+        XCTAssertEqual(restored, normal, "Releasing Option must restore the original row")
+        XCTAssertTrue(other.isSelected, "Modifier keys must not select the context target")
+        XCUIElement.perform(withKeyModifiers: .option) {
+            others.click()
+        }
+        XCTAssertTrue(other.waitForNonExistence(timeout: 15))
+        XCTAssertTrue(keep.exists, "Close Others must preserve the context target")
+        XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.files", in: app).exists)
+        XCTAssertEqual(try Data(contentsOf: first), Data("first\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("second\n".utf8))
+    }
+
     func testTabContextMenuFitsContentsWithoutWideShortcutColumn() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("menu-width.md", text: "Content remains untouched\n")
@@ -508,7 +572,7 @@ final class WorkspaceDockUITests: XCTestCase {
         let tab = WorkspaceUITestSupport.fileTab(file, in: window)
         XCTAssertTrue(tab.waitForExistence(timeout: 12))
         tab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
-        let menu = app.menus.containing(.menuItem, identifier: "Close Others").firstMatch
+        let menu = app.menus.containing(.menuItem, identifier: "Reveal in File Manager").firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 8))
         XCTAssertTrue(WorkspaceUITestSupport.menuItem("Close", in: menu).exists,
                       "The Close menu item and its native keyboard shortcut must coexist")
@@ -519,7 +583,7 @@ final class WorkspaceDockUITests: XCTestCase {
         add(screenshot)
         XCTAssertLessThan(menu.frame.width, 260,
                           "A short tab context menu should not reserve a 250pt shortcut column")
-        XCTAssertTrue(menu.menuItems["Close Tabs to the Right"].exists)
+        XCTAssertFalse(menu.menuItems["Close Tabs to the Right"].exists)
         XCTAssertTrue(menu.menuItems["Close All"].exists)
         for old in ["Rename…", "Use Automatic Title", "Close Files", "Close Diffs"] {
             XCTAssertFalse(menu.menuItems[old].exists)
@@ -542,7 +606,7 @@ final class WorkspaceDockUITests: XCTestCase {
         let tab = WorkspaceUITestSupport.fileTab(file, in: window)
         XCTAssertTrue(tab.waitForExistence(timeout: 12))
         tab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
-        let menu = app.menus.containing(.menuItem, identifier: "关闭其他").firstMatch
+        let menu = app.menus.containing(.menuItem, identifier: "在文件管理器中显示").firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 8))
         XCTAssertTrue(WorkspaceUITestSupport.menuItem("关闭", in: menu).exists,
                       "The native close action must remain available with its shortcut")
@@ -552,7 +616,7 @@ final class WorkspaceDockUITests: XCTestCase {
         screenshot.lifetime = .keepAlways
         add(screenshot)
         XCTAssertLessThan(menu.frame.width, 260)
-        XCTAssertTrue(menu.menuItems["关闭右侧标签页"].exists)
+        XCTAssertFalse(menu.menuItems["关闭右侧标签页"].exists)
         app.typeKey("w", modifierFlags: .command)
         XCTAssertTrue(tab.waitForNonExistence(timeout: 12),
                       "Cmd-W while the native menu is open must close its target exactly once")
@@ -586,7 +650,7 @@ final class WorkspaceDockUITests: XCTestCase {
         XCUIElement.perform(withKeyModifiers: .command) { tabs[2].click() }
         XCTAssertTrue(tabs[0].isSelected && tabs[2].isSelected)
         tabs[1].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
-        let menu = app.menus.containing(.menuItem, identifier: "Close Others").firstMatch
+        let menu = app.menus.containing(.menuItem, identifier: "Reveal in File Manager").firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 8),
                       "An unselected tab must have a single-item Close action")
         XCTAssertTrue(WorkspaceUITestSupport.menuItem("Close", in: menu).exists)
@@ -1141,7 +1205,7 @@ final class WorkspaceDockUITests: XCTestCase {
         firstTab.hover()
         let before = try contextOutlinePixels(of: firstTab)
         firstTab.rightClick()
-        let contextMenu = app.menus.containing(.menuItem, identifier: "Close Others").firstMatch
+        let contextMenu = app.menus.containing(.menuItem, identifier: "Reveal in File Manager").firstMatch
         XCTAssertTrue(contextMenu.waitForExistence(timeout: 8))
         XCTAssertTrue(WorkspaceUITestSupport.menuItem("Close", in: contextMenu).exists)
         XCTAssertNotEqual(try contextOutlinePixels(of: firstTab), before,
@@ -1471,7 +1535,7 @@ final class WorkspaceDockUITests: XCTestCase {
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         let outline = try contextOutlinePixels(of: sourceTab)
         sourceTab.rightClick()
-        XCTAssertTrue(app.menuItems["Close Others"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.menuItems["Reveal in File Manager"].waitForExistence(timeout: 8))
         XCTAssertNotEqual(try contextOutlinePixels(of: sourceTab), outline)
         XCTAssertTrue(csvTab.isSelected)
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])

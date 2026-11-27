@@ -87,7 +87,7 @@ final class CSVPreviewUITests: XCTestCase {
         func table(in window: XCUIElement) -> XCUIElement {
             window.descendants(matching: .any).matching(identifier: "bailey.csv.table").firstMatch
         }
-        let tabMenu = app.menus.containing(.menuItem, identifier: "Close Others").firstMatch
+        let tabMenu = app.menus.containing(.menuItem, identifier: "Reveal in File Manager").firstMatch
 
         open(backgroundFile, in: first)
         let background = WorkspaceUITestSupport.fileTab(backgroundFile, in: first)

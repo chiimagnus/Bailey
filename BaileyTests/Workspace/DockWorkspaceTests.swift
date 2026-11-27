@@ -28,16 +28,17 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertNotNil(project.dock.group(containing: .git))
     }
 
-    func testCloseToRightUsesClickedTabNotSelectionAndKeepsSingletonTools() throws {
-        let project = Project(fallbackName: "right menu", workspaceConfiguration: .standard)
+    func testCloseOthersUsesUnselectedContextTargetAndKeepsSingletonTools() throws {
+        let project = Project(fallbackName: "alternate close menu", workspaceConfiguration: .standard)
         for _ in 0..<3 { project.newBrowserTab(initialFocus: .none) }
         let tabs = project.tabs
         let group = try XCTUnwrap(project.dock.group(containing: .tab(tabs[0].id)))
         XCTAssertTrue(project.dock.move(.git, into: group.id))
         project.selectTab(tabs[0].id)
         project.selectTab(tabs[2].id, extending: .toggle)
-        project.closeToRight(of: tabs[0])
-        XCTAssertEqual(project.tabs.map(\.id), [tabs[0].id])
+        project.dock.selectForContextMenu(.tab(tabs[1].id))
+        project.closeOthers(tabs[1])
+        XCTAssertEqual(project.tabs.map(\.id), [tabs[1].id])
         XCTAssertEqual(project.dock.group(containing: .git)?.id, group.id)
         XCTAssertNotNil(project.dock.group(containing: .files))
         XCTAssertNotNil(project.dock.group(containing: .projects))

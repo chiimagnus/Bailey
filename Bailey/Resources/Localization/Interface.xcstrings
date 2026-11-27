@@ -208,16 +208,6 @@
         }
       }
     },
-    "Close Tabs to the Right" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "关闭右侧标签页"
-          }
-        }
-      }
-    },
     "Command Palette…" : {
       "localizations" : {
         "zh-Hans" : {

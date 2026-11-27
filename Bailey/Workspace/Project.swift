@@ -658,10 +658,6 @@ final class Project: nonisolated Identifiable {
         closePanels(dock.commandTargets(for: .tab(keep.id), scope: .otherTabs))
     }
 
-    func closeToRight(of tab: PaneTab) {
-        closePanels(dock.commandTargets(for: .tab(tab.id), scope: .tabsToRight))
-    }
-
     /// Closes every tab, leaving the project open but empty.
     func closeAll() {
         closeBatch(tabs.map(\.content))

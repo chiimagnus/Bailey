@@ -385,7 +385,7 @@ indirect enum DockSavedNode: Codable {
 @Observable
 final class DockWorkspaceModel {
     enum SelectionChange { case replace, preserve, toggle, range }
-    enum CommandScope { case selection, otherTabs, tabsToRight }
+    enum CommandScope { case selection, otherTabs }
     private struct ExtendedSelection {
         var items: Set<DockItem>
         var anchor: DockItem?
@@ -424,9 +424,6 @@ final class DockWorkspaceModel {
         switch scope {
         case .selection: return targets
         case .otherTabs: return group.items.filter { $0.tabID != nil && !targets.contains($0) }
-        case .tabsToRight:
-            guard let index = group.items.firstIndex(of: item) else { return [] }
-            return group.items.dropFirst(index + 1).filter { $0.tabID != nil }
         }
     }
 

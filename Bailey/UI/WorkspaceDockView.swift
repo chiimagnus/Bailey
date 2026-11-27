@@ -734,7 +734,8 @@ struct DockTabGroupView: View {
     private func isMenuForTab(_ menu: NSMenu, item: DockItem) -> Bool {
         guard isValidMenuTarget(item), project.dock.contextTarget == item else { return false }
         let title = closeTitle(for: item)
-        return menu.items.contains { $0.title == title }
+        let alternate = String(localized: "Close Others", table: "Interface")
+        return menu.items.contains { $0.title == title || (item.tabID != nil && $0.title == alternate) }
     }
 
     private func selectionChange(_ modifiers: NSEvent.ModifierFlags) -> DockWorkspaceModel.SelectionChange {
@@ -1006,14 +1007,12 @@ struct DockTabGroupView: View {
         }
         .keyboardShortcut("w", modifiers: .command)
         .disabled(project.isClosingPanels || tab.content.isClosing)
-        Button(String(localized: "Close Others", table: "Interface")) {
-            if let current = currentMenuTab(tabID) { project.closeOthers(current) }
+        .modifierKeyAlternate(.option) {
+            Button(String(localized: "Close Others", table: "Interface")) {
+                if let current = currentMenuTab(tabID) { project.closeOthers(current) }
+            }
+            .disabled(project.isClosingPanels || project.dock.commandTargets(for: .tab(tabID), scope: .otherTabs).isEmpty)
         }
-        .disabled(project.isClosingPanels || project.dock.commandTargets(for: .tab(tabID), scope: .otherTabs).isEmpty)
-        Button(String(localized: "Close Tabs to the Right", table: "Interface")) {
-            if let current = currentMenuTab(tabID) { project.closeToRight(of: current) }
-        }
-        .disabled(project.isClosingPanels || project.dock.commandTargets(for: .tab(tabID), scope: .tabsToRight).isEmpty)
         Button(String(localized: "Close All", table: "Interface")) {
             if currentMenuTab(tabID) != nil { project.closeAll() }
         }

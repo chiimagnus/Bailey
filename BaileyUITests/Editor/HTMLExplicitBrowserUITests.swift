@@ -20,7 +20,7 @@ final class HTMLExplicitBrowserUITests: XCTestCase {
         let editor = window.textViews.firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         tab.rightClick()
-        let menu = app.menus.containing(.menuItem, identifier: "Close Others").firstMatch
+        let menu = app.menus.containing(.menuItem, identifier: "Reveal in File Manager").firstMatch
         let split = WorkspaceUITestSupport.menuItem("Show Side by Side", in: menu)
         XCTAssertTrue(split.waitForExistence(timeout: 5))
         split.click()

@@ -37,7 +37,7 @@ final class HTMLFilePreviewUITests: XCTestCase {
         XCTAssertFalse(background.isSelected)
 
         background.rightClick()
-        let menu = app.menus.containing(.menuItem, identifier: "Close Others").firstMatch
+        let menu = app.menus.containing(.menuItem, identifier: "Reveal in File Manager").firstMatch
         let show = WorkspaceUITestSupport.menuItem("Show Preview", in: menu)
         XCTAssertTrue(show.waitForExistence(timeout: 5))
         show.click()
