@@ -67,7 +67,7 @@ final class WindowCloseIntegrationTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
     func testFailedCleanEncodingRetryRequiresNativeSaveDiscardOrCancelChoice() async throws {
-        let project = Project(fallbackName: "encoding close", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "encoding close", layout: .init())
         let backend = WindowSaveFixture("original")
         let file = FileTab(path: "/fixture/encoding.txt", backend: backend, workspaceIdentity: nil)
         try await file.waitForText()
@@ -110,7 +110,7 @@ final class WindowCloseIntegrationTests: XCTestCase {
     }
 
     func testNewDraftDuringBatchSaveProtectsEarlierCleanBrowserAndTool() async throws {
-        let project = Project(fallbackName: "new draft", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "new draft", layout: .init())
         let firstBackend = WindowSaveFixture("first original")
         await firstBackend.permitWrites()
         let first = FileTab(path: "/fixture/first.txt", backend: firstBackend, workspaceIdentity: nil)
@@ -154,7 +154,7 @@ final class WindowCloseIntegrationTests: XCTestCase {
     func testMixedSelectionWaitsForDirtySaveBeforeClosingToolAndBrowser() async throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "mixed close", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "mixed close", layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
         let backend = WindowSaveFixture("original")

@@ -497,6 +497,70 @@ final class WorkspaceDockUITests: XCTestCase {
         }
     }
 
+    func testTabCloseMenuReplacesCloseWhileOptionIsHeld() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("a.txt", text: "first\n")
+        let second = try fixture.file("b.txt", text: "second\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.matching(identifier: "main-AppWindow-1").firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 15))
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        for file in [first, second] {
+            let row = WorkspaceUITestSupport.fileRow(file, in: window)
+            XCTAssertTrue(row.waitForExistence(timeout: 15))
+            row.doubleClick()
+            XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: window).waitForExistence(timeout: 15))
+        }
+        let keep = WorkspaceUITestSupport.fileTab(first, in: window)
+        let other = WorkspaceUITestSupport.fileTab(second, in: window)
+        XCTAssertTrue(keep.isHittable)
+        XCTAssertTrue(other.isSelected)
+
+        keep.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
+        let menu = app.menus.containing(.menuItem, identifier: "Reveal in File Manager").firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 8))
+        let close = WorkspaceUITestSupport.menuItem("Close", in: menu)
+        let others = WorkspaceUITestSupport.menuItem("Close Others", in: menu)
+        let all = WorkspaceUITestSupport.menuItem("Close All", in: menu)
+        // AppKit exposes both alternate items through AX even though they
+        // occupy one visible row. Compare the actual pixels in that row.
+        XCTAssertTrue(close.exists && others.exists && all.exists)
+        XCTAssertFalse(menu.menuItems["Close Tabs to the Right"].exists)
+        let slot = close.frame
+        let allSlot = all.frame
+        XCTAssertEqual(others.frame.midY, slot.midY, accuracy: 2)
+        func capture(_ name: String) -> Data? {
+            let screenshot = close.screenshot()
+            let attachment = XCTAttachment(screenshot: screenshot)
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            guard let tiff = screenshot.image.tiffRepresentation,
+                  let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
+            return bitmap.representation(using: .png, properties: [:])
+        }
+        let normal = try XCTUnwrap(capture("Close"))
+        var alternate: Data?
+        XCUIElement.perform(withKeyModifiers: .option) {
+            XCTAssertEqual(others.frame.midY, slot.midY, accuracy: 2)
+            XCTAssertEqual(all.frame.midY, allSlot.midY, accuracy: 2)
+            alternate = capture("Option: Close Others")
+        }
+        let held = try XCTUnwrap(alternate)
+        XCTAssertNotEqual(held, normal, "Holding Option must repaint the native menu row")
+        let restored = try XCTUnwrap(capture("Release Option: Close"))
+        XCTAssertEqual(restored, normal, "Releasing Option must restore the original row")
+        XCTAssertTrue(other.isSelected, "Modifier keys must not select the context target")
+        XCUIElement.perform(withKeyModifiers: .option) {
+            others.click()
+        }
+        XCTAssertTrue(other.waitForNonExistence(timeout: 15))
+        XCTAssertTrue(keep.exists, "Close Others must preserve the context target")
+        XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.files", in: app).exists)
+        XCTAssertEqual(try Data(contentsOf: first), Data("first\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("second\n".utf8))
+    }
+
     func testTabContextMenuFitsContentsWithoutWideShortcutColumn() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("menu-width.md", text: "Content remains untouched\n")
@@ -508,7 +572,7 @@ final class WorkspaceDockUITests: XCTestCase {
         let tab = WorkspaceUITestSupport.fileTab(file, in: window)
         XCTAssertTrue(tab.waitForExistence(timeout: 12))
         tab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
-        let menu = app.menus.containing(.menuItem, identifier: "Close Others").firstMatch
+        let menu = app.menus.containing(.menuItem, identifier: "Reveal in File Manager").firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 8))
         XCTAssertTrue(WorkspaceUITestSupport.menuItem("Close", in: menu).exists,
                       "The Close menu item and its native keyboard shortcut must coexist")
@@ -519,7 +583,7 @@ final class WorkspaceDockUITests: XCTestCase {
         add(screenshot)
         XCTAssertLessThan(menu.frame.width, 260,
                           "A short tab context menu should not reserve a 250pt shortcut column")
-        XCTAssertTrue(menu.menuItems["Close Tabs to the Right"].exists)
+        XCTAssertFalse(menu.menuItems["Close Tabs to the Right"].exists)
         XCTAssertTrue(menu.menuItems["Close All"].exists)
         for old in ["Rename…", "Use Automatic Title", "Close Files", "Close Diffs"] {
             XCTAssertFalse(menu.menuItems[old].exists)
@@ -542,7 +606,7 @@ final class WorkspaceDockUITests: XCTestCase {
         let tab = WorkspaceUITestSupport.fileTab(file, in: window)
         XCTAssertTrue(tab.waitForExistence(timeout: 12))
         tab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
-        let menu = app.menus.containing(.menuItem, identifier: "关闭其他").firstMatch
+        let menu = app.menus.containing(.menuItem, identifier: "在文件管理器中显示").firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 8))
         XCTAssertTrue(WorkspaceUITestSupport.menuItem("关闭", in: menu).exists,
                       "The native close action must remain available with its shortcut")
@@ -552,7 +616,7 @@ final class WorkspaceDockUITests: XCTestCase {
         screenshot.lifetime = .keepAlways
         add(screenshot)
         XCTAssertLessThan(menu.frame.width, 260)
-        XCTAssertTrue(menu.menuItems["关闭右侧标签页"].exists)
+        XCTAssertFalse(menu.menuItems["关闭右侧标签页"].exists)
         app.typeKey("w", modifierFlags: .command)
         XCTAssertTrue(tab.waitForNonExistence(timeout: 12),
                       "Cmd-W while the native menu is open must close its target exactly once")
@@ -586,7 +650,7 @@ final class WorkspaceDockUITests: XCTestCase {
         XCUIElement.perform(withKeyModifiers: .command) { tabs[2].click() }
         XCTAssertTrue(tabs[0].isSelected && tabs[2].isSelected)
         tabs[1].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
-        let menu = app.menus.containing(.menuItem, identifier: "Close Others").firstMatch
+        let menu = app.menus.containing(.menuItem, identifier: "Reveal in File Manager").firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 8),
                       "An unselected tab must have a single-item Close action")
         XCTAssertTrue(WorkspaceUITestSupport.menuItem("Close", in: menu).exists)
@@ -656,10 +720,59 @@ final class WorkspaceDockUITests: XCTestCase {
         }
     }
 
+    func testRepeatedDockSplitAndMergeKeepEveryGroupDroppable() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("a.swift", text: "let a = 1\n")
+        let second = try fixture.file("b.swift", text: "let b = 2\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.matching(identifier: "main-AppWindow-1").firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 15))
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        for url in [first, second] {
+            let row = WorkspaceUITestSupport.fileRow(url, in: window)
+            XCTAssertTrue(row.waitForExistence(timeout: 15))
+            row.doubleClick()
+            XCTAssertTrue(WorkspaceUITestSupport.fileTab(url, in: window).waitForExistence(timeout: 15))
+        }
+        let a = WorkspaceUITestSupport.fileTab(first, in: window)
+        let b = WorkspaceUITestSupport.fileTab(second, in: window)
+        let origin = window.frame.origin
+        let dividers = window.otherElements.matching(identifier: "bailey.dock.divider")
+        XCTAssertEqual(dividers.count, 2)
+        for iteration in 0..<4 {
+            // Exercise the same two live tabs, not freshly launched fixtures.
+            b.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .click(forDuration: 0.25, thenDragTo:
+                    window.coordinate(withNormalizedOffset: CGVector(dx: 0.46, dy: 0.91)))
+            let split = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                dividers.count == 3 && a.exists && b.exists && abs(a.frame.midY - b.frame.midY) > 100
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [split], timeout: 10), .completed,
+                           "Split cycle \(iteration)")
+            XCTAssertEqual(window.frame.origin.x, origin.x, accuracy: 2)
+            XCTAssertEqual(window.frame.origin.y, origin.y, accuracy: 2)
+            a.click()
+            b.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .click(forDuration: 0.25, thenDragTo:
+                    a.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5)))
+            let merged = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                dividers.count == 2 && a.exists && b.exists && abs(a.frame.midY - b.frame.midY) < 4
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [merged], timeout: 10), .completed,
+                           "Merge cycle \(iteration)")
+            XCTAssertEqual(window.frame.origin.x, origin.x, accuracy: 2)
+            XCTAssertEqual(window.frame.origin.y, origin.y, accuracy: 2)
+            XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, 2)
+        }
+        XCTAssertEqual(try Data(contentsOf: first), Data("let a = 1\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("let b = 2\n".utf8))
+    }
+
     func testNestedDockSplitRepaintsEveryPaneAcrossPaletteChanges() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
-        let first = try fixture.file("nested-top.swift", text: "let top = 1\n")
-        let second = try fixture.file("nested-bottom.swift", text: "let bottom = 2\n")
+        let first = try fixture.file("a.swift", text: "let top = 1\n")
+        let second = try fixture.file("b.swift", text: "let bottom = 2\n")
         _ = try fixture.file(".config/bailey-dev/config.toml", text: """
             theme = "light"
             theme-light = "Ayu Light"
@@ -779,6 +892,19 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertEqual(main.otherElements.matching(identifier: "bailey.dock.divider").count, 3)
         XCTAssertEqual(upper.frame.midY, originalFrames.0.midY, accuracy: 3)
         XCTAssertEqual(lower.frame.midY, originalFrames.1.midY, accuracy: 3)
+
+        upper.click()
+        lower.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .click(forDuration: 0.25, thenDragTo:
+                upper.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5)))
+        let merged = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            main.otherElements.matching(identifier: "bailey.dock.divider").count == 2
+                && upper.exists && lower.exists && abs(upper.frame.midY - lower.frame.midY) < 4
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [merged], timeout: 10), .completed)
+        XCTAssertEqual(main.frame.origin.x, originalWindowOrigin.x, accuracy: 2)
+        XCTAssertEqual(main.frame.origin.y, originalWindowOrigin.y, accuracy: 2)
+        XCTAssertEqual(main.buttons.matching(identifier: "bailey.tab.file").count, 2)
         XCTAssertEqual(try Data(contentsOf: first), Data("let top = 1\n".utf8))
         XCTAssertEqual(try Data(contentsOf: second), Data("let bottom = 2\n".utf8))
     }
@@ -1141,7 +1267,7 @@ final class WorkspaceDockUITests: XCTestCase {
         firstTab.hover()
         let before = try contextOutlinePixels(of: firstTab)
         firstTab.rightClick()
-        let contextMenu = app.menus.containing(.menuItem, identifier: "Close Others").firstMatch
+        let contextMenu = app.menus.containing(.menuItem, identifier: "Reveal in File Manager").firstMatch
         XCTAssertTrue(contextMenu.waitForExistence(timeout: 8))
         XCTAssertTrue(WorkspaceUITestSupport.menuItem("Close", in: contextMenu).exists)
         XCTAssertNotEqual(try contextOutlinePixels(of: firstTab), before,
@@ -1158,6 +1284,88 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertTrue(secondTab.exists, "Right-clicking an inactive tab must not replace the active one")
         XCTAssertEqual(try Data(contentsOf: first), Data("first\n".utf8))
         XCTAssertEqual(try Data(contentsOf: second), Data("second\n".utf8))
+    }
+
+    func testProjectSwitchPreservesWindowSplitsAndIndependentFiles() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let a = try fixture.file("alpha/a.swift", text: "let a = 1\n")
+        let b = try fixture.file("alpha/b.swift", text: "let b = 2\n")
+        let c = try fixture.file("bravo/c.swift", text: "let c = 3\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: a.deletingLastPathComponent())
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 15))
+        let dividers = window.otherElements.matching(identifier: "bailey.dock.divider")
+        func frames() -> [CGRect] {
+            dividers.allElementsBoundByIndex.map(\.frame).sorted {
+                ($0.minX, $0.minY) < ($1.minX, $1.minY)
+            }
+        }
+        func open(_ file: URL) {
+            WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+            let row = WorkspaceUITestSupport.fileRow(file, in: window)
+            XCTAssertTrue(row.waitForExistence(timeout: 15))
+            row.doubleClick()
+            XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: window).waitForExistence(timeout: 15))
+        }
+        func projectRow(_ name: String) -> XCUIElement {
+            window.descendants(matching: .any).matching(identifier: "bailey.project.row")
+                .matching(NSPredicate(format: "label CONTAINS %@", name)).firstMatch
+        }
+        open(a)
+        open(b)
+        let first = WorkspaceUITestSupport.fileTab(a, in: window)
+        let second = WorkspaceUITestSupport.fileTab(b, in: window)
+        second.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .click(forDuration: 0.3, thenDragTo:
+                window.coordinate(withNormalizedOffset: CGVector(dx: 0.46, dy: 0.91)))
+        let split = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            dividers.count == 3 && abs(first.frame.midY - second.frame.midY) > 100
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [split], timeout: 10), .completed)
+        let original = frames()
+        let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
+        let added = expectation(description: "Add a real project after changing the window layout")
+        NSWorkspace.shared.open([c.deletingLastPathComponent()], withApplicationAt: bundle,
+                                configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            XCTAssertNil(error)
+            added.fulfill()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [added], timeout: 15), .completed)
+        XCTAssertTrue(projectRow("bravo").waitForExistence(timeout: 15))
+        XCTAssertTrue(projectRow("bravo").isSelected)
+        XCTAssertEqual(frames(), original)
+        XCTAssertFalse(first.exists)
+        XCTAssertFalse(second.exists)
+        open(c)
+        let third = WorkspaceUITestSupport.fileTab(c, in: window)
+        for _ in 0..<2 {
+            projectRow("alpha").click()
+            XCTAssertTrue(first.waitForExistence(timeout: 15))
+            XCTAssertTrue(second.exists)
+            XCTAssertFalse(third.exists)
+            XCTAssertEqual(frames(), original)
+            projectRow("bravo").click()
+            XCTAssertTrue(third.waitForExistence(timeout: 15))
+            XCTAssertFalse(first.exists)
+            XCTAssertEqual(frames(), original)
+        }
+        projectRow("alpha").click()
+        XCTAssertTrue(second.waitForExistence(timeout: 15))
+        second.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .click(forDuration: 0.3, thenDragTo:
+                first.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5)))
+        let merged = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            dividers.count == 2 && abs(first.frame.midY - second.frame.midY) < 4
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [merged], timeout: 10), .completed)
+        projectRow("bravo").click()
+        XCTAssertTrue(third.waitForExistence(timeout: 15))
+        XCTAssertEqual(dividers.count, 2)
+        XCTAssertEqual(try String(contentsOf: a, encoding: .utf8), "let a = 1\n")
+        XCTAssertEqual(try String(contentsOf: b, encoding: .utf8), "let b = 2\n")
+        XCTAssertEqual(try String(contentsOf: c, encoding: .utf8), "let c = 3\n")
     }
 
     func testSystemProjectMenuRetainsCurrentProjectWithoutPicker() throws {
@@ -1392,6 +1600,52 @@ final class WorkspaceDockUITests: XCTestCase {
         return Data(rgb)
     }
 
+    func testRetiredLayoutSettingsDoNotChangeDefaultWindowAndAddPanelActions() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file(".config/bailey-dev/config.toml", text: """
+        workspace.groups = ["projects,files,git"]
+        workspace.selected = ["projects"]
+        workspace.weights = [1]
+        workspace.add-actions = ["projects", "session"]
+        workspace.edge-threshold = 0.4
+        """)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+            configurationHome: fixture.root, project: fixture.root)
+        let window = app.windows.firstMatch
+        let dividers = window.otherElements.matching(identifier: "bailey.dock.divider")
+        XCTAssertTrue(window.waitForExistence(timeout: 15))
+        let plus = window.buttons.matching(identifier: "bailey.dock.addPanel")
+        XCTAssertTrue(plus.firstMatch.waitForExistence(timeout: 15))
+        XCTAssertEqual(dividers.count, 2)
+        XCTAssertEqual(plus.count, 3)
+        func middlePlus() throws -> XCUIElement {
+            try XCTUnwrap(plus.allElementsBoundByIndex.sorted { $0.frame.midX < $1.frame.midX }.dropFirst().first)
+        }
+        try middlePlus().click()
+        let terminalAction = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New Terminal")).firstMatch
+        XCTAssertTrue(terminalAction.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Open File")).firstMatch.exists)
+        terminalAction.click()
+        let terminal = WorkspaceUITestSupport.element("bailey.tab.terminal", in: app)
+        XCTAssertTrue(terminal.waitForExistence(timeout: 15))
+        let boundaries = dividers.allElementsBoundByIndex.map(\.frame.midX).sorted()
+        XCTAssertGreaterThan(terminal.frame.midX, boundaries[0])
+        XCTAssertLessThan(terminal.frame.midX, boundaries[1])
+        let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
+        git.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(git.waitForNonExistence(timeout: 10))
+        try middlePlus().click()
+        let addGit = app.buttons["Git Manager"]
+        XCTAssertTrue(addGit.waitForExistence(timeout: 10))
+        addGit.click()
+        XCTAssertTrue(git.waitForExistence(timeout: 10))
+        XCTAssertGreaterThan(git.frame.midX, boundaries[0])
+        XCTAssertLessThan(git.frame.midX, boundaries[1])
+        XCTAssertEqual(dividers.count, 2)
+    }
+
     func testClosingExplicitlyActivatedProjectsKeepsFilesWithoutDragging() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("unchanged.swift", text: "original bytes\n")
@@ -1471,7 +1725,7 @@ final class WorkspaceDockUITests: XCTestCase {
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         let outline = try contextOutlinePixels(of: sourceTab)
         sourceTab.rightClick()
-        XCTAssertTrue(app.menuItems["Close Others"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.menuItems["Reveal in File Manager"].waitForExistence(timeout: 8))
         XCTAssertNotEqual(try contextOutlinePixels(of: sourceTab), outline)
         XCTAssertTrue(csvTab.isSelected)
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])

@@ -1738,9 +1738,10 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
                 pinnedFile: nil,
                 tabs: [],
                 selectedTabIndex: nil,
-                dock: .group(.init(id: UUID(), items: [.files], selected: .files))
+                groups: []
             )
-            return SessionSnapshot(projects: [project], selectedProjectIndex: 0)
+            return SessionSnapshot(projects: [project], selectedProjectIndex: 0,
+                                   layout: .group(DockGroup(items: [.files])))
         }
         SessionStore.save([snapshot(named: "one"), snapshot(named: "two")])
         let application = WorkspaceApplication(loadSavedState: true)
@@ -1781,7 +1782,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
 
         let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let remote = Project(fallbackName: "SSH", workspaceConfiguration: .standard)
+        let remote = Project(fallbackName: "SSH", layout: manager.dockLayout)
         remote.sshHost = "invalid-worktree-protection-fixture"
         remote.customDirectory = "/remote/unrelated"
         manager.projects.append(remote)

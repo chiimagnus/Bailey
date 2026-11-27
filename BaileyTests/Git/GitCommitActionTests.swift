@@ -1151,9 +1151,9 @@ final class GitCommitActionTests: XCTestCase {
         let workspaceApplication = WorkspaceApplication()
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let first = Project(fallbackName: "First", workspaceConfiguration: .standard)
+        let first = Project(fallbackName: "First", layout: manager.dockLayout)
         first.customDirectory = firstRoot.path
-        let second = Project(fallbackName: "Second", workspaceConfiguration: .standard)
+        let second = Project(fallbackName: "Second", layout: manager.dockLayout)
         second.customDirectory = secondRoot.path
         manager.projects = [first, second]
         manager.selectedProjectID = first.id

@@ -118,7 +118,7 @@ final class AppIdentityTests: XCTestCase {
         let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
         defer { terminal.terminate() }
         let tab = PaneTab(content: .session(terminal))
-        let project = Project(fallbackName: "Original", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Original", layout: .init())
         project.append(tab)
         let changes = Mutex<Int>(0)
 
@@ -169,15 +169,12 @@ final class AppIdentityTests: XCTestCase {
         let savedHistories = TerminalHistoryStore.load()
         let first = application.makeWindow()
         let second = application.makeWindow()
-        func project(_ name: String) -> Project {
-            Project(fallbackName: name, workspaceConfiguration: .standard)
-        }
-        let alpha = project("Alpha 🌷")
-        let duplicate = project("Alpha 🌷")
-        let bravo = project("Bravo 中文")
+        let alpha = Project(fallbackName: "Alpha 🌷", layout: first.dockLayout)
+        let duplicate = Project(fallbackName: "Alpha 🌷", layout: first.dockLayout)
+        let bravo = Project(fallbackName: "Bravo 中文", layout: first.dockLayout)
         first.projects = [alpha, duplicate, bravo]
         first.selectedProjectID = duplicate.id
-        let charlie = project("Charlie")
+        let charlie = Project(fallbackName: "Charlie", layout: second.dockLayout)
         second.projects = [charlie]
         second.selectedProjectID = charlie.id
         func window(_ owner: WorkspaceWindowModel, title: String) -> NSWindow {
@@ -516,9 +513,12 @@ final class AppIdentityTests: XCTestCase {
             Button("Move to Trash", role: .destructive, action: {})
                 .keyboardShortcut(.delete, modifiers: [])
             Button("Close", action: {}).keyboardShortcut("w", modifiers: .command)
+                .modifierKeyAlternate(.option) {
+                    Button("Close Others", action: {})
+                }
             Button("Stage All Changes", action: {})
                 .keyboardShortcut("y", modifiers: [.command, .shift])
-            Button("Close Tabs to the Right", action: {})
+            Button("Close All", action: {})
         })
         menu.update()
         let expected: [(String, String, NSEvent.ModifierFlags)] = [
@@ -537,7 +537,12 @@ final class AppIdentityTests: XCTestCase {
         XCTAssertFalse(delete.keyEquivalent.isEmpty)
         XCTAssertTrue(delete.keyEquivalentModifierMask.isEmpty)
         XCTAssertFalse(try XCTUnwrap(menu.items.first { $0.title == "Paste" }).isEnabled)
-        XCTAssertEqual(menu.items.last?.title, "Close Tabs to the Right")
+        let closeIndex = try XCTUnwrap(menu.items.firstIndex { $0.title == "Close" })
+        let alternate = try XCTUnwrap(menu.items.first { $0.title == "Close Others" })
+        XCTAssertTrue(alternate.isAlternate)
+        XCTAssertTrue(alternate.keyEquivalentModifierMask.contains(.option))
+        XCTAssertTrue(menu.items[closeIndex + 1] === alternate)
+        XCTAssertEqual(menu.items.last?.title, "Close All")
         XCTAssertTrue(try XCTUnwrap(menu.items.last).keyEquivalent.isEmpty)
     }
 

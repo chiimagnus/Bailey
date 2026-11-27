@@ -281,7 +281,7 @@ final class PanelContextTests: XCTestCase {
     }
 
     func testLocalProjectCannotBorrowTerminalSSHForInteractiveGitRebase() {
-        let project = Project(fallbackName: "Local", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Local", layout: .init())
         project.customDirectory = "/tmp/fixed-root"
         let remote = PanelContext(
             identity: .init(project: project.id, workspace: "ssh:some-host", directory: "/remote"),
@@ -434,7 +434,7 @@ final class PanelContextTests: XCTestCase {
     }
 
     func testGitFixedTargetFollowsOnlyAuthorizedProject() throws {
-        let project = Project(fallbackName: "Fixed", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Fixed", layout: .init())
         project.customDirectory = "/tmp/bailey-git-fixed"
         let model = GitStatusModel()
         model.syncSelectedProject(project: project) { $0 === project }

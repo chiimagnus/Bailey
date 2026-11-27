@@ -188,12 +188,7 @@ struct FinderWindowDrop: DropDelegate {
         let projectID = manager.selectedProjectID
         return receive(providers, preferred: manager) { urls, owner in
             guard owner.selectedProjectID == projectID else { return }
-            if let destination {
-                guard owner.selectedProjectID == destination.projectID,
-                      owner.selectedProject?.dock.root.group(id: destination.groupID) != nil
-                else { return }
-            }
-            manager.application.openExternalFiles(
+            owner.application.openExternalFiles(
                 urls, preferred: owner, destination: destination
             )
         }

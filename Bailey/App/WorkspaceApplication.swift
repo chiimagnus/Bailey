@@ -79,8 +79,9 @@ final class WorkspaceApplication {
     /// GUI launch restores the saved windows; test owners start empty unless
     /// a test explicitly requests persisted state.
     init(loadSavedState: Bool = false) {
-        pendingRestores = loadSavedState ? SessionStore.load() : []
-        pendingHistories = loadSavedState ? TerminalHistoryStore.load() : [:]
+        let snapshots = loadSavedState ? SessionStore.load() : []
+        pendingRestores = snapshots
+        pendingHistories = snapshots.isEmpty ? [:] : TerminalHistoryStore.load()
         if BaileyInstanceMode.isIsolated,
            let path = ProcessInfo.processInfo.environment["BAILEY_UI_TEST_PROJECT"],
            URL(fileURLWithPath: path).standardizedFileURL.pathComponents.contains(
@@ -539,8 +540,10 @@ final class WorkspaceApplication {
         let requests = pendingExternalFiles
         pendingExternalFiles = []
         for request in requests {
-            if let preferred = request.preferred,
-               preferred.selectedProjectID != request.originalProjectID {
+            let projectUnchanged = request.preferred == nil
+                || request.preferred?.selectedProjectID == request.originalProjectID
+            guard projectUnchanged,
+                  request.destination.map({ request.preferred?.acceptsDockDestination($0) == true }) ?? true else {
                 request.completion(false)
                 continue
             }

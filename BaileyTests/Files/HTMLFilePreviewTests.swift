@@ -81,7 +81,7 @@ final class HTMLFilePreviewTests: XCTestCase {
         let original = Data(source("Saved").utf8)
         let draft = source("Draft")
         try original.write(to: path)
-        let project = Project(fallbackName: "Explicit HTML", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Explicit HTML", layout: .init())
         project.openLocalFile(path.path)
         let pane = try XCTUnwrap(project.selectedTab)
         guard case .file(let file) = pane.content else { return XCTFail("Expected file tab") }
@@ -160,7 +160,7 @@ final class HTMLFilePreviewTests: XCTestCase {
         let external = Data("<title>external</title>".utf8)
         XCTAssertEqual(source.count, external.count)
         try source.write(to: path)
-        let project = Project(fallbackName: "HTML conflict", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "HTML conflict", layout: .init())
         project.openLocalFile(path.path)
         let pane = try XCTUnwrap(project.selectedTab)
         guard case .file(let local) = pane.content else { return XCTFail("Expected local HTML") }
@@ -1253,7 +1253,7 @@ final class HTMLFilePreviewTests: XCTestCase {
         let backend = SSHWorkspaceBackend(runner: runner)
         let path = "/fixture/index.html"
         let directory = "/fixture"
-        let project = Project(fallbackName: "Preview lifecycle", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Preview lifecycle", layout: .init())
         defer { project.terminateAll() }
         let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
         let tab = PaneTab(content: .file(file))
@@ -1307,7 +1307,7 @@ final class HTMLFilePreviewTests: XCTestCase {
             """ + (1...12).map { "<img src='image-\($0).svg'>" }.joined()
         let runner = SuspendedAssetRunner(source: source)
         let backend = SSHWorkspaceBackend(runner: runner)
-        let project = Project(fallbackName: "Preview renderer exit", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Preview renderer exit", layout: .init())
         defer { project.terminateAll() }
         let file = FileTab(path: "/fixture/index.html", backend: backend, workspaceIdentity: "ssh:fixture")
         let tab = PaneTab(content: .file(file))

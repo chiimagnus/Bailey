@@ -224,7 +224,7 @@ final class SSHWindowsFileEventsTests: XCTestCase {
         let link = root + "/alias"
         let actual = root + "/actual"
         let member = UUID()
-        let project = Project(fallbackName: "Symlink Root", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Symlink Root", layout: .init())
         project.sshHost = host
         project.customDirectory = link
         func cleanup() async {
@@ -275,7 +275,7 @@ final class SSHWindowsFileEventsTests: XCTestCase {
               !root.dropFirst("/tmp/bailey-p2-owner-".count).contains("/") else {
             throw WorkspaceError.notFound
         }
-        let project = Project(fallbackName: "SSH File Events", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "SSH File Events", layout: .init())
         project.sshHost = host
         project.customDirectory = root
         let first = UUID()

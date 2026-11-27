@@ -534,7 +534,7 @@ final class MarkdownResourceScopeTests: XCTestCase {
             at: importedFolder.appending(path: "escaped.md"), withDestinationURL: outside
         )
 
-        let project = Project(fallbackName: "Workspace", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Workspace", layout: .init())
         project.customDirectory = projectRoot.path
         project.openLocalFile(document.path)
         guard case .file(let source)? = project.focusedContent else {
@@ -572,7 +572,7 @@ final class MarkdownResourceScopeTests: XCTestCase {
         try Data("private".utf8).write(to: temporary.appending(path: "secret.md"))
         try Data("# Guide".utf8).write(to: docs.appending(path: "Guide.md"))
 
-        let project = Project(fallbackName: "SSH", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "SSH", layout: .init())
         project.sshHost = "unreachable-ssh-fixture"
         // Remote and local paths are strings, so they can coincide without
         // representing files on the same machine.
@@ -609,7 +609,7 @@ final class MarkdownResourceScopeTests: XCTestCase {
         try original.write(to: document)
         try Data("# Guide\n".utf8).write(to: target)
 
-        let project = Project(fallbackName: "Markdown", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Markdown", layout: .init())
         project.customDirectory = root.path
         project.openFile(document.path)
         guard case .file(let source)? = project.focusedContent else {
@@ -649,7 +649,7 @@ final class MarkdownResourceScopeTests: XCTestCase {
         let document = docs.appending(path: "Readme.md")
         try Data("# Readme".utf8).write(to: document)
         try Data("safe".utf8).write(to: assets.appending(path: "image.dat"))
-        let project = Project(fallbackName: "Workspace", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Workspace", layout: .init())
         project.customDirectory = temporary.path
         project.openFile(document.path)
         guard case .file(let source)? = project.focusedContent else {

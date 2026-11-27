@@ -22,7 +22,7 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
     func testSSHHelperHandoffUsesTheRebaseFixturesApplication() async throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "SSH fixture", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "SSH fixture", layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
         let session = project.newSession(directory: FileManager.default.temporaryDirectory.path)
@@ -91,7 +91,7 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
         _ = try git(["config", "sequence.editor", RemoteCommands.quote(editorPath.path)])
         let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "PTY Rebase", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "PTY Rebase", layout: manager.dockLayout)
         project.customDirectory = directory.path
         manager.projects = [project]
         manager.selectedProjectID = project.id
@@ -225,7 +225,7 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
             savedWorkspace = (SessionStore.load(), TerminalHistoryStore.load())
             let manager = self.workspaceApplication.makeWindow()
             defer { manager.windowClosed() }
-            let project = Project(fallbackName: "SSH PTY Rebase", workspaceConfiguration: .standard)
+            let project = Project(fallbackName: "SSH PTY Rebase", layout: manager.dockLayout)
             manager.projects = [project]
             manager.selectedProjectID = project.id
             project.sshHost = host

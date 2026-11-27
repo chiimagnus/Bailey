@@ -56,9 +56,9 @@ final class Project: nonisolated Identifiable {
     private(set) var isClosingPanels = false
     private let fallbackName: String
 
-    init(fallbackName: String, workspaceConfiguration: DockWorkspaceConfiguration) {
+    init(fallbackName: String, layout: DockWindowLayout) {
         self.fallbackName = fallbackName
-        dock = DockWorkspaceModel(configuration: workspaceConfiguration)
+        dock = DockWorkspaceModel(layout: layout)
         dock.onSnapshotChange = { [weak self] in self?.onSnapshotChange?() }
         dock.onDeactivate = { [weak self] item in
             guard let id = item.contentTabID else { return }
@@ -205,11 +205,12 @@ final class Project: nonisolated Identifiable {
         directory: String? = nil,
         launchCommand: String? = nil,
         initialWorkspace: PanelContext? = nil,
-        initialInput: String? = nil
+        initialInput: String? = nil,
+        inGroup groupID: UUID? = nil
     ) -> TerminalSession {
         let session = makeSession(directory: directory, launchCommand: launchCommand, initialWorkspace: initialWorkspace, initialInput: initialInput)
         let tab = makeTab(content: .session(session))
-        insertNextToSelected(tab)
+        insertNextToSelected(tab, inGroup: groupID)
         selectTab(tab.id)
         return session
     }
@@ -393,13 +394,7 @@ final class Project: nonisolated Identifiable {
         }
         let tab = makeTab(content: .file(file))
         tab.contextSession = context
-        // A Finder drop targets this Dock group, not the group containing
-        // the previously selected tab. Stage placement before tabs didSet
-        // synchronizes layout, so an empty target group is not discarded.
-        if let groupID, dock.root.group(id: groupID) != nil {
-            _ = dock.place(.tab(tab.id), in: groupID)
-        }
-        insertNextToSelected(tab)
+        insertNextToSelected(tab, inGroup: groupID)
         selectTab(tab.id, activating: activating)
     }
 
@@ -658,10 +653,6 @@ final class Project: nonisolated Identifiable {
         closePanels(dock.commandTargets(for: .tab(keep.id), scope: .otherTabs))
     }
 
-    func closeToRight(of tab: PaneTab) {
-        closePanels(dock.commandTargets(for: .tab(tab.id), scope: .tabsToRight))
-    }
-
     /// Closes every tab, leaving the project open but empty.
     func closeAll() {
         closeBatch(tabs.map(\.content))
@@ -770,7 +761,7 @@ final class Project: nonisolated Identifiable {
         }
         closeBatch(contents) { [weak self] accepted in
             guard accepted, let self else { return }
-            for item in items {
+            for item in items where item.tabID == nil {
                 // Closing only a companion must not discard an active native input session.
                 if case .filePreview(let id) = item,
                    let tab = self.tabs.first(where: { $0.id == id }),
@@ -833,7 +824,7 @@ final class Project: nonisolated Identifiable {
     ) -> PaneTab {
         let tab = PaneTab(content: makeContent(
             from: snap.content,
-            localFile: snap.localFile == true,
+            localFile: snap.localFile,
             restoredHistory: snap.historyKey.flatMap { histories[$0] }
         ))
         append(tab)
@@ -842,8 +833,8 @@ final class Project: nonisolated Identifiable {
 
     private func makeContent(
         from snap: SessionSnapshot.ProjectSnapshot.ContentSnapshot,
-        localFile: Bool = false,
-        restoredHistory: String? = nil
+        localFile: Bool,
+        restoredHistory: String?
     ) -> PaneContent {
         switch snap {
         case .session(let workingDirectory):
@@ -871,7 +862,8 @@ final class Project: nonisolated Identifiable {
     /// new tabs open next to the current one instead of at the end of the
     /// strip. Appends when there's no selection — the first tab, or while
     /// restoring, where selection tracks the last tab added.
-    private func insertNextToSelected(_ tab: PaneTab) {
+    private func insertNextToSelected(_ tab: PaneTab, inGroup groupID: UUID? = nil) {
+        if let groupID { _ = dock.place(.tab(tab.id), in: groupID) }
         if let selectedTabID,
            let index = tabs.firstIndex(where: { $0.id == selectedTabID }) {
             tabs.insert(tab, at: index + 1)

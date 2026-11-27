@@ -8,7 +8,7 @@ final class DockWorkspaceTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
     func testCloseOthersKeepsBackgroundGroupSelectionWithoutActivatingIt() throws {
-        let project = Project(fallbackName: "background menu", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "background menu", layout: .init())
         for _ in 0..<5 { project.newBrowserTab(initialFocus: .none) }
         let tabs = project.tabs
         let destination = try XCTUnwrap(project.dock.group(containing: .files))
@@ -28,16 +28,17 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertNotNil(project.dock.group(containing: .git))
     }
 
-    func testCloseToRightUsesClickedTabNotSelectionAndKeepsSingletonTools() throws {
-        let project = Project(fallbackName: "right menu", workspaceConfiguration: .standard)
+    func testCloseOthersUsesUnselectedContextTargetAndKeepsSingletonTools() throws {
+        let project = Project(fallbackName: "alternate close menu", layout: .init())
         for _ in 0..<3 { project.newBrowserTab(initialFocus: .none) }
         let tabs = project.tabs
         let group = try XCTUnwrap(project.dock.group(containing: .tab(tabs[0].id)))
         XCTAssertTrue(project.dock.move(.git, into: group.id))
         project.selectTab(tabs[0].id)
         project.selectTab(tabs[2].id, extending: .toggle)
-        project.closeToRight(of: tabs[0])
-        XCTAssertEqual(project.tabs.map(\.id), [tabs[0].id])
+        project.dock.selectForContextMenu(.tab(tabs[1].id))
+        project.closeOthers(tabs[1])
+        XCTAssertEqual(project.tabs.map(\.id), [tabs[1].id])
         XCTAssertEqual(project.dock.group(containing: .git)?.id, group.id)
         XCTAssertNotNil(project.dock.group(containing: .files))
         XCTAssertNotNil(project.dock.group(containing: .projects))
@@ -47,7 +48,7 @@ final class DockWorkspaceTests: XCTestCase {
         for count in 1...6 {
             for mask in 1..<(1 << count) {
                 for index in -1...(count + 1) {
-                    let dock = DockWorkspaceModel()
+                    let dock = DockWorkspaceModel(layout: .init())
                     let ids = (0..<count).map { _ in UUID() }
                     let items = ids.map(DockItem.tab)
                     dock.syncTabs(ids, near: nil)
@@ -80,7 +81,7 @@ final class DockWorkspaceTests: XCTestCase {
         for count in [1, 2, 32] {
             for edge in [nil, DockEdge.left, .right, .top, .bottom] {
                 for entireGroup in [false, true] {
-                    let dock = DockWorkspaceModel()
+                    let dock = DockWorkspaceModel(layout: .init())
                     let ids = (0..<count).map { _ in UUID() }
                     let items = ids.map(DockItem.tab)
                     dock.syncTabs(ids, near: nil)
@@ -113,7 +114,7 @@ final class DockWorkspaceTests: XCTestCase {
     }
 
     func testIdleDragCancellationDoesNotInvalidateDockObservation() async throws {
-        let project = Project(fallbackName: "idle drag", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "idle drag", layout: .init())
         let dragging = DockTabDragCoordinator()
         let invalidation = expectation(description: "No preview mutation without a drag position")
         invalidation.isInverted = true
@@ -126,7 +127,7 @@ final class DockWorkspaceTests: XCTestCase {
     }
 
     func testDragSourceCannotRestartAfterCancelResizeOrLayoutInvalidation() throws {
-        let project = Project(fallbackName: "drag", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "drag", layout: .init())
         project.newBrowserTab(initialFocus: .none)
         project.newBrowserTab(initialFocus: .none)
         let dock = project.dock
@@ -134,33 +135,35 @@ final class DockWorkspaceTests: XCTestCase {
         project.selectTab(project.tabs[0].id)
         project.selectTab(project.tabs[1].id, extending: .toggle)
         let target = try XCTUnwrap(dock.group(containing: .files))
-        let frame = CGRect(x: 100, y: 100, width: 300, height: 400)
+        let bounds = CGRect(x: 100, y: 100, width: 1000, height: 600)
+        let frame = try XCTUnwrap(DockLayout(dock.root, in: bounds).panes.first { $0.id == target.id }).frame
+        let point = CGPoint(x: frame.midX, y: frame.midY)
         let dragging = DockTabDragCoordinator()
-        dragging.setGroupFrame(frame, for: target.id)
         let before = dock.root
-        for invalidation in 0..<4 {
+        for invalidation in 0..<3 {
+            dragging.setRootFrame(bounds)
             dragging.begin(items[0], dock: dock)
-            dragging.update(items[0], at: .init(x: 230, y: 320), dock: dock)
+            dragging.update(items[0], at: point, dock: dock)
             XCTAssertEqual(dragging.position?.items, items)
             switch invalidation {
             case 0: dragging.cancel()
-            case 1: dragging.setGroupFrame(frame.offsetBy(dx: 1, dy: 0), for: target.id)
-            case 2: dragging.setTabFrame(frame, for: items[0], in: target.id)
+            case 1: dragging.setRootFrame(bounds.offsetBy(dx: 1, dy: 0))
             default:
-                let other = Project(fallbackName: "other window", workspaceConfiguration: .standard)
+                let other = Project(fallbackName: "other window", layout: .init())
                 dragging.finish(project: other)
                 XCTAssertEqual(other.tabs.count, 0)
             }
-            dragging.update(items[0], at: .init(x: 230, y: 320), dock: dock)
+            dragging.update(items[0], at: point, dock: dock)
             dragging.finish(project: project)
             XCTAssertEqual(dock.root, before)
             XCTAssertNil(dragging.position)
         }
+        dragging.setRootFrame(bounds)
         dragging.begin(items[0], dock: dock)
-        dragging.update(items[0], at: .init(x: 230, y: 320), dock: dock)
+        dragging.update(items[0], at: point, dock: dock)
         dock.removeTool(.git)
         let changed = dock.root
-        dragging.update(items[0], at: .init(x: 230, y: 320), dock: dock)
+        dragging.update(items[0], at: point, dock: dock)
         dragging.finish(project: project)
         XCTAssertEqual(dock.root, changed)
         XCTAssertTrue(project.tabs.enumerated().allSatisfy { items[$0.offset] == .tab($0.element.id) })
@@ -168,7 +171,7 @@ final class DockWorkspaceTests: XCTestCase {
 
     func testBatchMoveCollapsesOnlyItsSourceAndPublishesOneFinalLayout() throws {
         for edge in [nil, DockEdge.left, .right, .top, .bottom] {
-            let dock = DockWorkspaceModel()
+            let dock = DockWorkspaceModel(layout: .init())
             let source = try XCTUnwrap(dock.group(containing: .files))
             let target = try XCTUnwrap(dock.group(containing: .projects))
             let empty = try XCTUnwrap(dock.root.groups.first { $0.items.isEmpty })
@@ -191,7 +194,7 @@ final class DockWorkspaceTests: XCTestCase {
 
     func testBatchReorderRejectsSelectionInteriorAndAdjustsAllRemovedIndices() throws {
         for index in [-2, 0, 1, 2, 3, 4, 5, 6, 99] {
-            let dock = DockWorkspaceModel()
+            let dock = DockWorkspaceModel(layout: .init())
             let ids = (0..<6).map { _ in UUID() }
             let items = ids.map(DockItem.tab)
             dock.syncTabs(ids, near: nil)
@@ -221,7 +224,7 @@ final class DockWorkspaceTests: XCTestCase {
     }
 
     func testTabSelectionKeepsIslandsAndRemovesOnlyOppositeAnchorSide() throws {
-        let dock = DockWorkspaceModel()
+        let dock = DockWorkspaceModel(layout: .init())
         let items = (0..<5).map { _ in DockItem.tab(UUID()) }
         dock.syncTabs(items.compactMap { if case .tab(let id) = $0 { id } else { nil } }, near: nil)
         let group = try XCTUnwrap(dock.group(containing: items[0]))
@@ -246,7 +249,7 @@ final class DockWorkspaceTests: XCTestCase {
     }
 
     func testTabPointerDownPreservesDragSelectionAndOrdinaryReleaseCollapsesIt() throws {
-        let dock = DockWorkspaceModel()
+        let dock = DockWorkspaceModel(layout: .init())
         let group = try XCTUnwrap(dock.group(containing: .files))
         dock.select(.files)
         dock.select(.git, extending: .toggle)
@@ -267,7 +270,7 @@ final class DockWorkspaceTests: XCTestCase {
     }
 
     func testSelectionPrunesRemovedMembersAndAnchorAndDoesNotCrossWindows() throws {
-        let dock = DockWorkspaceModel()
+        let dock = DockWorkspaceModel(layout: .init())
         let ids = (0..<32).map { _ in UUID() }
         dock.syncTabs(ids, near: nil)
         dock.select(.tab(ids[0]))
@@ -277,7 +280,7 @@ final class DockWorkspaceTests: XCTestCase {
         dock.syncTabs(Array(ids.dropFirst()), near: nil)
         XCTAssertNil(dock.anchor(in: group.id))
         XCTAssertEqual(dock.selection(in: group.id).count, 31)
-        XCTAssertTrue(DockWorkspaceModel().selection(in: group.id).isEmpty)
+        XCTAssertTrue(DockWorkspaceModel(layout: .init()).selection(in: group.id).isEmpty)
         dock.select(.tab(ids[1]), extending: .range)
         XCTAssertTrue(dock.selection(in: group.id).contains(try XCTUnwrap(dock.activeGroup?.selected)))
         dock.syncTabs([], near: nil)
@@ -285,7 +288,7 @@ final class DockWorkspaceTests: XCTestCase {
     }
 
     func testGitChangesPreviewDisplaysDiffWithoutActivatingEditorGroup() throws {
-        let project = Project(fallbackName: "Git preview", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Git preview", layout: .init())
         let gitGroup = try XCTUnwrap(project.dock.group(containing: .git))
         project.dock.select(.git)
         let repo = "/tmp/bailey-focus-git-preview"
@@ -312,7 +315,7 @@ final class DockWorkspaceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let path = directory.appendingPathComponent("preview.swift").path
         try "let preview = 1\n".write(toFile: path, atomically: true, encoding: .utf8)
-        let project = Project(fallbackName: "preview", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "preview", layout: .init())
         let files = try XCTUnwrap(project.dock.group(containing: .files))
         project.dock.activate(files.id)
         project.openFile(path, activating: false)
@@ -378,14 +381,11 @@ final class DockWorkspaceTests: XCTestCase {
         let second = directory.appendingPathComponent("second.swift")
         try "first\n".write(to: first, atomically: true, encoding: .utf8)
         try "second\n".write(to: second, atomically: true, encoding: .utf8)
-        let configuration = try XCTUnwrap(DockWorkspaceConfiguration(
-            groupNames: ["projects,files,git"], selectedNames: ["files"],
-            weights: [1], actionNames: ["session", "projects", "files", "git"],
-            edgeThreshold: 0.22
-        ))
-        let project = Project(fallbackName: "same group", workspaceConfiguration: configuration)
+        let manager = WorkspaceWindowModel(application: workspaceApplication)
+        workspaceApplication.register(manager)
+        manager.dockLayout.root = .group(DockGroup(items: [.projects, .files, .git], selected: .files))
+        let project = Project(fallbackName: "same group", layout: manager.dockLayout)
         project.customDirectory = directory.path
-        let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.projects = [project]
         manager.selectedProjectID = project.id
@@ -406,12 +406,9 @@ final class DockWorkspaceTests: XCTestCase {
     }
 
     func testBrowsingSameGroupMustNotKeepFocusOnHiddenFilesPanel() throws {
-        let configuration = try XCTUnwrap(DockWorkspaceConfiguration(
-            groupNames: ["projects,files,git"], selectedNames: ["files"],
-            weights: [1], actionNames: ["session", "projects", "files", "git"],
-            edgeThreshold: 0.22
-        ))
-        let project = Project(fallbackName: "same group", workspaceConfiguration: configuration)
+        let layout = DockWindowLayout()
+        layout.root = .group(DockGroup(items: [.projects, .files, .git], selected: .files))
+        let project = Project(fallbackName: "same group", layout: layout)
         let path = "/tmp/preview-in-same-group.swift"
         project.dock.select(.files)
         project.openFile(path, activating: false)
@@ -421,8 +418,58 @@ final class DockWorkspaceTests: XCTestCase {
                        "When Files is hidden, a visible document must receive focus")
     }
 
+    func testOrdinarySelectionDoesNotCalculateRecentTabOrder() throws {
+        let dock = DockWorkspaceModel(layout: .init())
+        let ids = [UUID(), UUID(), UUID()]
+        dock.syncTabs(ids, near: nil)
+        let items = ids.map(DockItem.tab)
+        var calls = 0
+        func recency() -> [DockItem] {
+            calls += 1
+            return [items[1], items[0]]
+        }
+        dock.select(items[0], preferred: recency())
+        dock.select(items[1], extending: .toggle, preferred: recency())
+        dock.select(items[2], extending: .range, preferred: recency())
+        dock.select(items[2], extending: .preserve, preferred: recency())
+        XCTAssertEqual(calls, 0)
+        dock.select(items[2], extending: .toggle, preferred: recency())
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(dock.activeGroup?.selected, items[1])
+    }
+
+    func testDefaultWindowGroupsAreNotStoredAsProjectOverrides() async throws {
+        let layout = DockWindowLayout()
+        let dock = DockWorkspaceModel(layout: layout)
+        let invalidation = expectation(description: "Unchanged default groups do not invalidate content")
+        invalidation.isInverted = true
+        withObservationTracking({ _ = dock.root }) { invalidation.fulfill() }
+        dock.syncTabs([], near: nil)
+        await fulfillment(of: [invalidation], timeout: 0.1)
+        XCTAssertTrue(dock.snapshot(tabIDs: []).isEmpty)
+
+        let tools = try XCTUnwrap(layout.root.group(containing: .files))
+        dock.select(.git)
+        let overrides = dock.snapshot(tabIDs: [])
+        XCTAssertEqual(overrides.map(\.id), [tools.id])
+        XCTAssertEqual(overrides.first?.selected, .git)
+        XCTAssertEqual(layout.root.group(id: tools.id)?.selected, .files)
+        dock.select(.files)
+        XCTAssertTrue(dock.snapshot(tabIDs: []).isEmpty)
+
+        let id = UUID()
+        dock.syncTabs([id], near: nil)
+        let work = try XCTUnwrap(dock.group(containing: .tab(id)))
+        XCTAssertEqual(dock.snapshot(tabIDs: [id]).map(\.id), [work.id])
+        let restored = DockWorkspaceModel(layout: layout)
+        restored.restore(dock.snapshot(tabIDs: [id]), tabIDs: [id])
+        XCTAssertEqual(restored.root, dock.root)
+        dock.syncTabs([], near: nil)
+        XCTAssertTrue(dock.snapshot(tabIDs: []).isEmpty)
+    }
+
     func testSyncTabsWithIdenticalLayoutDoesNotRequestSnapshot() throws {
-        let project = Project(fallbackName: "stable layout", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "stable layout", layout: .init())
         let dock = project.dock
         var snapshots = 0
         project.onSnapshotChange = { snapshots += 1 }
@@ -436,7 +483,7 @@ final class DockWorkspaceTests: XCTestCase {
     }
 
     func testFocusingAlreadyVisibleWorkTabsDoesNotRequestASnapshot() throws {
-        let project = Project(fallbackName: "transient focus", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "transient focus", layout: .init())
         project.newBrowserTab(initialFocus: .none)
         let first = try XCTUnwrap(project.selectedTab)
         project.newBrowserTab(initialFocus: .none)
@@ -456,7 +503,7 @@ final class DockWorkspaceTests: XCTestCase {
     }
 
     func testPanelNavigationSkipsToolPanels() throws {
-        let project = Project(fallbackName: "Panels", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Panels", layout: .init())
         let emptyGroup = try XCTUnwrap(project.dock.root.groups.first { $0.items.isEmpty })
         project.dock.activate(emptyGroup.id)
         project.selectNextPanel()
@@ -506,7 +553,7 @@ final class DockWorkspaceTests: XCTestCase {
     }
 
     func testPanelAndProjectSelectionBeyondNineItems() throws {
-        let project = Project(fallbackName: "Many panels", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Many panels", layout: .init())
         for _ in 0..<12 {
             project.newBrowserTab(initialFocus: .none)
         }
@@ -518,7 +565,7 @@ final class DockWorkspaceTests: XCTestCase {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.projects = (0..<12).map {
-            Project(fallbackName: "Project \($0 + 1)", workspaceConfiguration: .standard)
+            Project(fallbackName: "Project \($0 + 1)", layout: manager.dockLayout)
         }
         XCTAssertEqual(manager.projects.count, 12)
         manager.selectProject(index: 11)
@@ -526,31 +573,31 @@ final class DockWorkspaceTests: XCTestCase {
     }
 
     func testAddPanelOnlyOffersMissingToolsAcrossAllGroups() throws {
-        let dock = DockWorkspaceModel()
+        let dock = DockWorkspaceModel(layout: .init())
         let emptyGroup = try XCTUnwrap(dock.root.groups.first { $0.items.isEmpty })
-        XCTAssertEqual(dock.availableAddActions(), [.session])
+        XCTAssertEqual(dock.layout.availableTools, [])
 
         XCTAssertTrue(dock.move(.files, into: emptyGroup.id))
         let otherGroup = try XCTUnwrap(dock.group(containing: .projects))
-        XCTAssertEqual(dock.availableAddActions(), [.session],
+        XCTAssertEqual(dock.layout.availableTools, [],
                        "A tool moved into another group must not appear as addable")
 
         dock.removeTool(.files)
-        XCTAssertEqual(dock.availableAddActions(), [.session, .files])
+        XCTAssertEqual(dock.layout.availableTools, [.files])
         XCTAssertTrue(dock.place(.files, in: otherGroup.id))
-        XCTAssertEqual(dock.availableAddActions(), [.session])
+        XCTAssertEqual(dock.layout.availableTools, [])
 
         dock.removeTool(.git)
         dock.removeTool(.projects)
-        XCTAssertEqual(dock.availableAddActions(), [.session, .projects, .git])
-        XCTAssertEqual(DockWorkspaceModel().availableAddActions(), [.session],
-                       "Other projects retain their own available tool list")
+        XCTAssertEqual(dock.layout.availableTools, [.projects, .git])
+        XCTAssertEqual(DockWindowLayout().availableTools, [],
+                       "Other windows retain their own available tool list")
     }
 
     func testToolsCanMoveIntoEmptyGroupsAtTheCenterAndEveryEdge() throws {
         for item in [DockItem.projects, .files, .git] {
             for edge in [nil, DockEdge.left, .right, .top, .bottom] {
-                let dock = DockWorkspaceModel()
+                let dock = DockWorkspaceModel(layout: .init())
                 let empty = try XCTUnwrap(dock.root.groups.first(where: { $0.items.isEmpty }))
                 XCTAssertTrue(dock.move(item, into: empty.id, edge: edge), "\(item), \(String(describing: edge))")
                 XCTAssertEqual(dock.activeGroup?.selected, item)
@@ -561,18 +608,20 @@ final class DockWorkspaceTests: XCTestCase {
     }
 
     func testSingleAndTwoGroupLayoutsAndEmptyToolOnlyProject() throws {
-        for names in [["projects,files,git"], ["projects", "files,git"]] {
-            let configuration = try XCTUnwrap(DockWorkspaceConfiguration(
-                groupNames: names, selectedNames: names.map { String($0.split(separator: ",")[0]) },
-                weights: names.map { _ in 1 }, actionNames: ["session", "projects", "files", "git"],
-                edgeThreshold: 0.22
-            ))
-            let manager = self.workspaceApplication.makeWindow()
+        for count in [1, 2] {
+            let application = WorkspaceApplication()
+            let manager = WorkspaceWindowModel(application: application)
+            application.register(manager)
+            manager.dockLayout.root = count == 1
+                ? .group(DockGroup(items: [.projects, .files, .git]))
+                : .split(DockSplit(axis: .horizontal, fraction: 0.5,
+                    first: .group(DockGroup(items: [.projects])),
+                    second: .group(DockGroup(items: [.files, .git]))))
             defer { manager.windowClosed() }
-            let project = Project(fallbackName: "empty", workspaceConfiguration: configuration)
+            let project = Project(fallbackName: "empty", layout: manager.dockLayout)
             manager.projects = [project]
             manager.selectedProjectID = project.id
-            XCTAssertEqual(project.dock.root.groups.count, names.count)
+            XCTAssertEqual(project.dock.root.groups.count, count)
             for tool in [DockItem.files, .git, .projects] {
                 manager.showPanel(tool)
                 XCTAssertNil(project.focusedContent)
@@ -587,7 +636,7 @@ final class DockWorkspaceTests: XCTestCase {
     }
 
     func testClosingRecentWorkDoesNotOverrideAnActiveTool() throws {
-        let project = Project(fallbackName: "close focus", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "close focus", layout: .init())
         project.newBrowserTab(initialFocus: .none)
         project.newBrowserTab(initialFocus: .none)
         let recent = try XCTUnwrap(project.selectedTab)
@@ -601,7 +650,7 @@ final class DockWorkspaceTests: XCTestCase {
     }
 
     func testMovingActiveContentDoesNotDeactivateItThroughAnIntermediateGroup() throws {
-        let dock = DockWorkspaceModel()
+        let dock = DockWorkspaceModel(layout: .init())
         let id = UUID()
         dock.syncTabs([id], near: nil)
         dock.select(.tab(id))
@@ -620,7 +669,7 @@ final class DockWorkspaceTests: XCTestCase {
     }
 
     func testActivityIsTransientAndDoesNotChangeOtherGroupSelections() throws {
-        let project = Project(fallbackName: "focus", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "focus", layout: .init())
         let first = project.newBrowserTab(initialFocus: .none)
         let webView = first.webView
         let firstTab = try XCTUnwrap(project.selectedTab)
@@ -652,7 +701,7 @@ final class DockWorkspaceTests: XCTestCase {
     }
 
     func testActiveGroupSurvivesNestedMovesAndFallsBackAfterRemovalAndRestore() throws {
-        let dock = DockWorkspaceModel()
+        let dock = DockWorkspaceModel(layout: .init())
         let ids = (0..<8).map { _ in UUID() }
         dock.syncTabs(ids, near: nil)
         for (index, id) in ids.enumerated() {
@@ -663,14 +712,15 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertGreaterThan(dock.root.groups.count, 6)
         let oldActive = dock.activeGroupID
         dock.syncTabs(Array(ids.dropLast()), near: nil)
-        XCTAssertNotEqual(dock.activeGroupID, oldActive)
-        XCTAssertNotNil(dock.activeGroup)
+        XCTAssertEqual(dock.activeGroupID, oldActive)
+        XCTAssertNil(dock.activeGroup?.selected)
         for tool in [DockItem.files, .git, .projects] {
             dock.select(tool)
             dock.removeTool(tool)
             XCTAssertNotNil(dock.activeGroup)
         }
-        let other = DockWorkspaceModel()
+        let other = DockWorkspaceModel(layout: .init())
+        dock.layout.root = other.layout.root
         dock.restore(other.snapshot(tabIDs: []), tabIDs: [])
         XCTAssertNotNil(dock.activeGroup)
         XCTAssertTrue(dock.root.groups.contains { $0.id == dock.activeGroupID })
@@ -680,10 +730,94 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertNil(dock.activeGroup?.selected)
     }
 
+    func testProjectSwitchDoesNotChangeWindowLayoutOrOtherWindows() throws {
+        let application = WorkspaceApplication()
+        let first = application.makeWindow()
+        let second = application.makeWindow()
+        defer { first.windowClosed(); second.windowClosed() }
+        let a = Project(fallbackName: "A", layout: first.dockLayout)
+        let b = Project(fallbackName: "B", layout: first.dockLayout)
+        let c = Project(fallbackName: "C", layout: second.dockLayout)
+        first.projects = [a, b]
+        first.selectedProjectID = a.id
+        second.projects = [c]
+        second.selectedProjectID = c.id
+        for project in [a, b, c] {
+            project.newBrowserTab(initialFocus: .none)
+            project.newBrowserTab(initialFocus: .none)
+        }
+        func layout(_ project: Project) -> DockNode {
+            project.dock.root.mappingGroups { group in
+                group.items.removeAll { $0.contentTabID != nil }
+                group.selected = nil
+            }
+        }
+        let independent = layout(c)
+        XCTAssertEqual(layout(a), layout(b))
+        guard case .split(let split) = a.dock.root else { return XCTFail("Expected split") }
+        first.resizeDock(split.id, to: 0.32)
+        let work = try XCTUnwrap(a.dock.group(containing: .tab(a.tabs[0].id)))
+        XCTAssertTrue(a.movePanels(.tab(a.tabs[1].id), into: work.id, edge: .bottom))
+        let lower = try XCTUnwrap(a.dock.group(containing: .tab(a.tabs[1].id)))
+        XCTAssertTrue(a.dock.move(.git, into: work.id))
+        let shared = layout(a)
+        first.selectedProjectID = b.id
+        XCTAssertEqual(layout(b), shared)
+        XCTAssertEqual(layout(c), independent)
+        XCTAssertEqual(Set(b.dock.tabOrder), Set(b.tabs.map(\.id)))
+        guard b.dock.root.group(id: lower.id) != nil else { return XCTFail("Split must exist in every project in this window") }
+        let retained = b.tabs[1]
+        XCTAssertTrue(b.movePanels(.tab(retained.id), into: lower.id))
+        b.selectTab(retained.id)
+        first.selectedProjectID = a.id
+        XCTAssertTrue(a.movePanels(.tab(a.tabs[1].id), into: work.id))
+        let merged = layout(a)
+        a.closeAll()
+        XCTAssertTrue(a.tabs.isEmpty)
+        XCTAssertEqual(layout(a), merged, "Closing content must not collapse the window layout")
+        first.selectedProjectID = b.id
+        XCTAssertEqual(layout(b), merged)
+        XCTAssertEqual(Set(b.dock.tabOrder), Set(b.tabs.map(\.id)))
+        XCTAssertTrue(b.tabs.contains { $0 === retained })
+        XCTAssertNotNil(b.dock.group(containing: .tab(retained.id)))
+        XCTAssertEqual(layout(c), independent)
+        first.projects.append(Project(fallbackName: "New", layout: first.dockLayout))
+        let new = try XCTUnwrap(first.projects.last)
+        XCTAssertEqual(layout(new), merged)
+        XCTAssertTrue(new.dock.tabOrder.isEmpty)
+    }
+
+    func testOpeningAndClosingContentDirectlyInAGroupPreservesTheWindow() throws {
+        let application = WorkspaceApplication()
+        let window = application.makeWindow()
+        defer { window.windowClosed() }
+        let a = Project(fallbackName: "A", layout: window.dockLayout)
+        let b = Project(fallbackName: "B", layout: window.dockLayout)
+        window.projects = [a, b]
+        window.selectedProjectID = a.id
+        let target = try XCTUnwrap(a.dock.group(containing: .files))
+        let before = window.dockLayout.root
+        a.newSession(inGroup: target.id)
+        XCTAssertEqual(a.dock.group(containing: .tab(try XCTUnwrap(a.selectedTabID)))?.id, target.id)
+        XCTAssertEqual(window.dockLayout.root, before)
+        window.selectedProjectID = b.id
+        b.newBrowserTab(initialFocus: .none)
+        let selected = b.dock.activeGroup?.selected
+        a.closeAll()
+        XCTAssertTrue(a.tabs.isEmpty)
+        XCTAssertEqual(window.dockLayout.root, before)
+        XCTAssertEqual(b.dock.activeGroup?.selected, selected)
+        window.closePanel(.git, in: b)
+        XCTAssertNil(a.dock.group(containing: .git))
+        XCTAssertNil(b.dock.group(containing: .git))
+        window.showPanel(.git)
+        XCTAssertEqual(a.dock.group(containing: .git)?.id, b.dock.group(containing: .git)?.id)
+    }
+
     func testClosePanelInEmptyDockGroupDoesNotCloseProject() throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "empty dock", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "empty dock", layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
         let empty = try XCTUnwrap(project.dock.root.groups.first { $0.items.isEmpty })
@@ -700,8 +834,8 @@ final class DockWorkspaceTests: XCTestCase {
     func testExplicitPanelCloseKeepsActiveTargetAndRejectsAnotherProject() throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "active", workspaceConfiguration: .standard)
-        let other = Project(fallbackName: "other", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "active", layout: manager.dockLayout)
+        let other = Project(fallbackName: "other", layout: manager.dockLayout)
         manager.projects = [project, other]
         manager.selectedProjectID = project.id
         manager.showPanel(.files)
@@ -805,7 +939,7 @@ final class DockWorkspaceTests: XCTestCase {
     func testLosingKeyWindowInvalidatesCurrentContextTarget() throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "first", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "first", layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
         let active = project.dock.activeGroup?.selected
@@ -821,7 +955,7 @@ final class DockWorkspaceTests: XCTestCase {
     func testMainMenuCloseIgnoresContextOnlyTarget() throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "main-menu", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "main-menu", layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
         manager.showPanel(.files)
@@ -837,8 +971,8 @@ final class DockWorkspaceTests: XCTestCase {
     func testRightClickToolTargetIsIndependentOfActiveGroupAndProject() throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let first = Project(fallbackName: "one", workspaceConfiguration: .standard)
-        let second = Project(fallbackName: "two", workspaceConfiguration: .standard)
+        let first = Project(fallbackName: "one", layout: manager.dockLayout)
+        let second = Project(fallbackName: "two", layout: manager.dockLayout)
         manager.projects = [first, second]
         manager.selectedProjectID = first.id
         first.dock.select(.files)
@@ -863,7 +997,7 @@ final class DockWorkspaceTests: XCTestCase {
     func testToolsAreNotTheMostRecentWorkContentAndCloseTheirOwnPanel() throws {
         let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "focus", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "focus", layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
         let browser = project.newBrowserTab(initialFocus: .none)
@@ -885,7 +1019,7 @@ final class DockWorkspaceTests: XCTestCase {
     }
 
     func testNestedLayoutObservationAndDragCancelPreserveUniqueOwners() async throws {
-        let project = Project(fallbackName: "dock observation", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "dock observation", layout: .init())
         let browser = BrowserTab(initialFocus: .none)
         let pane = PaneTab(content: .browser(browser))
         project.append(pane)
@@ -906,14 +1040,15 @@ final class DockWorkspaceTests: XCTestCase {
         let dragging = DockTabDragCoordinator()
         let activityBeforePreview = dock.activeGroupID
         let moved = try XCTUnwrap(dock.group(containing: .tab(pane.id)))
-        let frame = CGRect(x: 100, y: 100, width: 300, height: 400)
+        let bounds = CGRect(x: 100, y: 100, width: 1600, height: 800)
+        let frame = try XCTUnwrap(DockLayout(dock.root, in: bounds).panes.first { $0.id == moved.id }).frame
         let positionChanged = expectation(description: "Only real drag preview changes are observed")
         withObservationTracking({ _ = dragging.position }) { positionChanged.fulfill() }
-        dragging.setGroupFrame(frame, for: moved.id)
-        dragging.setTabFrame(CGRect(x: 100, y: 100, width: 120, height: 38), for: .tab(pane.id), in: moved.id)
+        dragging.setRootFrame(bounds)
+        dragging.setTabFrame(CGRect(x: frame.minX, y: frame.minY, width: 120, height: 38), for: .tab(pane.id), in: moved.id, dock: dock)
         XCTAssertNil(dragging.position)
         dragging.begin(.files, dock: dock)
-        dragging.update(.files, at: CGPoint(x: 101, y: 300), dock: dock)
+        dragging.update(.files, at: CGPoint(x: frame.minX + 1, y: frame.midY), dock: dock)
         XCTAssertEqual(dock.activeGroupID, activityBeforePreview)
         await fulfillment(of: [positionChanged], timeout: 1)
         XCTAssertEqual(dragging.position?.destination, moved.id)
@@ -923,12 +1058,12 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertNil(dragging.position)
         XCTAssertTrue(dock.root.groups.contains { $0.items.contains(.files) })
         dragging.begin(.files, dock: dock)
-        dragging.update(.files, at: CGPoint(x: 160, y: 118), dock: dock)
+        dragging.update(.files, at: CGPoint(x: frame.minX + 60, y: frame.minY + 18), dock: dock)
         XCTAssertEqual(dragging.position?.index, 1)
-        XCTAssertEqual(dragging.insertionX(in: moved), 220)
-        dragging.update(.files, at: CGPoint(x: 159, y: 118), dock: dock)
+        XCTAssertEqual(dragging.insertionX(in: moved), frame.minX + 120)
+        dragging.update(.files, at: CGPoint(x: frame.minX + 59, y: frame.minY + 18), dock: dock)
         XCTAssertEqual(dragging.position?.index, 0)
-        XCTAssertEqual(dragging.insertionX(in: moved), 100)
+        XCTAssertEqual(dragging.insertionX(in: moved), frame.minX)
         dragging.finish(project: project)
         XCTAssertNil(dragging.position)
         XCTAssertEqual(dock.root.groups.flatMap(\.items).filter { $0 == .files }.count, 1)
@@ -941,24 +1076,64 @@ final class DockWorkspaceTests: XCTestCase {
     }
 
     func testDropInsertionUsesMountedTabRangeInsteadOfUnloadedTail() throws {
-        let dock = DockWorkspaceModel()
+        let dock = DockWorkspaceModel(layout: .init())
         let ids = (0..<120).map { _ in UUID() }
         let items = ids.map(DockItem.tab)
         dock.syncTabs(ids, near: nil)
         let group = try XCTUnwrap(dock.group(containing: items[0]))
         let dragging = DockTabDragCoordinator()
-        dragging.setGroupFrame(CGRect(x: 100, y: 100, width: 600, height: 400), for: group.id)
+        let bounds = CGRect(x: 100, y: 100, width: 1600, height: 600)
+        let frame = try XCTUnwrap(DockLayout(dock.root, in: bounds).panes.first { $0.id == group.id }).frame
+        dragging.setRootFrame(bounds)
         for index in 20...25 {
-            dragging.setTabFrame(CGRect(x: 140 + (index - 20) * 60, y: 100, width: 60, height: 38),
-                                 for: items[index], in: group.id)
+            dragging.setTabFrame(CGRect(x: frame.minX + 40 + CGFloat(index - 20) * 60, y: frame.minY, width: 60, height: 38),
+                                 for: items[index], in: group.id, dock: dock)
         }
         dragging.begin(.files, dock: dock)
-        for (x, index, insertion) in [(141, 20, 140), (250, 22, 260), (510, 26, 500)] {
-            dragging.update(.files, at: CGPoint(x: x, y: 118), dock: dock)
+        for (x, index, insertion) in [(41, 20, 40), (150, 22, 160), (410, 26, 400)] {
+            dragging.update(.files, at: CGPoint(x: frame.minX + CGFloat(x), y: frame.minY + 18), dock: dock)
             XCTAssertEqual(dragging.position?.index, index)
-            XCTAssertEqual(dragging.insertionX(in: group), CGFloat(insertion))
+            XCTAssertEqual(dragging.insertionX(in: group), frame.minX + CGFloat(insertion))
         }
+        // A scroll/selection update changes insertion geometry, not ownership.
+        for index in 20...25 {
+            dragging.setTabFrame(nil, for: items[index], in: group.id, dock: dock)
+        }
+        dragging.setTabFrame(CGRect(x: frame.minX + 40, y: frame.minY, width: 60, height: 38),
+                             for: items[26], in: group.id, dock: dock)
+        dock.select(items[26], activating: false)
+        dragging.update(.files, at: CGPoint(x: frame.minX + 75, y: frame.minY + 18), dock: dock)
+        XCTAssertEqual(dragging.position?.index, 27)
+        XCTAssertEqual(dragging.position?.items, [.files])
         dragging.cancel()
+    }
+
+    func testDockLayoutPartitionsEveryNestedGroupAndKeepsIdentitiesOnResize() throws {
+        let a = DockGroup(items: [.projects])
+        let b = DockGroup(items: [.files])
+        let c = DockGroup(items: [.git])
+        let vertical = DockSplit(axis: .vertical, fraction: 0.25, first: .group(b), second: .group(c))
+        let outer = DockSplit(axis: .horizontal, fraction: 0.4, first: .group(a), second: .split(vertical))
+        let root = DockNode.split(outer)
+        let bounds = CGRect(x: 13, y: 27, width: 1001, height: 801)
+        let initial = DockLayout(root, in: bounds)
+        XCTAssertEqual(initial.panes.map(\.id), [a.id, b.id, c.id])
+        XCTAssertEqual(initial.panes.map(\.frame), [
+            CGRect(x: 13, y: 27, width: 400, height: 801),
+            CGRect(x: 414, y: 27, width: 600, height: 200),
+            CGRect(x: 414, y: 228, width: 600, height: 600)
+        ])
+        XCTAssertEqual(Set(initial.dividers.map(\.id)), [outer.id, vertical.id])
+        let resized = DockLayout(root, in: bounds, resizing: (vertical.id, 0.75))
+        XCTAssertEqual(resized.panes.map(\.id), initial.panes.map(\.id))
+        XCTAssertEqual(resized.panes[0].frame, initial.panes[0].frame)
+        XCTAssertEqual(resized.panes[1].frame.height, 600)
+        XCTAssertEqual(resized.panes[2].frame.height, 200)
+        XCTAssertEqual(resized.panes[2].frame.maxY, bounds.maxY)
+        let collapsed = DockLayout(DockNode.split(DockSplit(id: outer.id, axis: .horizontal,
+            fraction: outer.fraction, first: .group(a), second: .group(b))), in: bounds)
+        XCTAssertEqual(collapsed.panes.map(\.id), [a.id, b.id])
+        XCTAssertEqual(collapsed.panes[1].frame, CGRect(x: 414, y: 27, width: 600, height: 801))
     }
 
     func testDefaultLayoutAndDropHitTesting() throws {
@@ -970,7 +1145,7 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertNil(DockDropHitTest.edge(at: CGPoint(x: 160, y: 170), in: frame))
         XCTAssertNil(DockDropHitTest.edge(at: CGPoint(x: 12, y: 25), in: frame))
 
-        let dock = DockWorkspaceModel()
+        let dock = DockWorkspaceModel(layout: .init())
         let groups = dock.root.groups
         XCTAssertEqual(groups.count, 3)
         XCTAssertEqual(groups[0].items, [.projects])
@@ -986,42 +1161,8 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertEqual(inner.fraction, 0.52 / 0.76, accuracy: 0.0001)
     }
 
-    func testConfigurationRejectsInvalidLayouts() throws {
-        let configuration = try XCTUnwrap(DockWorkspaceConfiguration(
-            groupNames: ["files", "projects", "git"],
-            selectedNames: ["files", "projects", "git"],
-            weights: [2, 3, 1],
-            actionNames: ["session", "git", "projects", "files"],
-            edgeThreshold: 0.1
-        ))
-        XCTAssertEqual(configuration.groupNames, ["files", "projects", "git"])
-        XCTAssertEqual(configuration.addActions, [.session, .git, .projects, .files])
-
-        let invalid: [([String], [String], [Double], [String], Double)] = [
-            (["projects,projects"], ["projects"], [1], ["session"], 0.22),
-            (["projects,unknown"], ["projects"], [1], ["session"], 0.22),
-            (["projects,info"], ["projects"], [1], ["session"], 0.22),
-            (["projects"], ["info"], [1], ["session"], 0.22),
-            (["projects"], ["projects"], [1], ["session", "info"], 0.22),
-            (["projects"], ["git"], [1], ["session"], 0.22),
-            (["projects"], ["projects"], [0], ["session"], 0.22),
-            (["projects"], ["projects"], [1], ["session", "session"], 0.22),
-            (["projects"], ["projects"], [1], ["files"], 0.22),
-            (["projects"], ["projects"], [1], ["session"], 0.95),
-        ]
-        for value in invalid {
-            XCTAssertNil(DockWorkspaceConfiguration(
-                groupNames: value.0,
-                selectedNames: value.1,
-                weights: value.2,
-                actionNames: value.3,
-                edgeThreshold: value.4
-            ))
-        }
-    }
-
     func testMoveReorderSnapshotAndRestore() throws {
-        let dock = DockWorkspaceModel()
+        let dock = DockWorkspaceModel(layout: .init())
         let initialGroups = dock.root.groups
         let center = initialGroups[1].id
         let projects = initialGroups[0].id
@@ -1042,23 +1183,24 @@ final class DockWorkspaceTests: XCTestCase {
 
         let data = try JSONEncoder().encode(dock.snapshot(tabIDs: [a, b, c]))
         XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("region"))
-        let saved = try JSONDecoder().decode(DockSavedNode.self, from: data)
-        let restored = DockWorkspaceModel()
+        let saved = try JSONDecoder().decode([DockSavedGroup].self, from: data)
+        let restored = DockWorkspaceModel(layout: .init())
+        restored.layout.root = dock.layout.root
         restored.restore(saved, tabIDs: [a, b, c])
         XCTAssertEqual(restored.tabOrder, [c, b, a])
         XCTAssertFalse(restored.move(.projects, into: UUID()))
     }
 
     func testNestedResizeKeepsContent() throws {
-        let dock = DockWorkspaceModel()
+        let dock = DockWorkspaceModel(layout: .init())
         let first = try XCTUnwrap(dock.root.groups.first?.id)
         XCTAssertTrue(dock.move(.files, into: first, edge: .top))
         guard case .split(let outer) = dock.root,
               case .split(let inner) = outer.first else {
             return XCTFail("Expected nested split")
         }
-        dock.resize(outer.id, to: 0.25)
-        dock.resize(inner.id, to: 0.65)
+        dock.layout.resize(outer.id, to: 0.25)
+        dock.layout.resize(inner.id, to: 0.65)
         XCTAssertNotNil(dock.group(containing: .files))
     }
 }

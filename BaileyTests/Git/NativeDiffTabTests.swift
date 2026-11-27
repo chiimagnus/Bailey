@@ -289,7 +289,7 @@ final class NativeDiffTabTests: XCTestCase {
         let file = directory.appendingPathComponent("cached.swift")
         let original = (0..<2_000).map { "let row\($0) = \($0)\n" }.joined()
         try Data(original.utf8).write(to: file)
-        let project = Project(fallbackName: "Retained Diff", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Retained Diff", layout: .init())
         project.customDirectory = directory.path
         project.openDiff(repoRoot: directory.path, path: file.lastPathComponent, staged: false,
                          untracked: true, origPath: nil, activating: false)
@@ -336,7 +336,7 @@ final class NativeDiffTabTests: XCTestCase {
         let file = directory.appendingPathComponent("remount.swift")
         let original = (0..<1_500).map { "let value\($0) = \($0)\n" }.joined()
         try Data(original.utf8).write(to: file)
-        let project = Project(fallbackName: "Remounted Diff", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Remounted Diff", layout: .init())
         project.customDirectory = directory.path
         project.openDiff(repoRoot: directory.path, path: file.lastPathComponent, staged: false,
                          untracked: true, origPath: nil, activating: false)
@@ -393,7 +393,7 @@ final class NativeDiffTabTests: XCTestCase {
 
         let preferences = try isolatedPreferences()
         preferences.diffStyle = .split
-        let project = Project(fallbackName: "Native Close", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Native Close", layout: .init())
         project.customDirectory = directory.path
         let diff = DiffTab(repoRoot: directory.path, path: file.lastPathComponent,
                            source: .worktree, untracked: false, origPath: nil,
@@ -466,7 +466,7 @@ final class NativeDiffTabTests: XCTestCase {
 
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let project = Project(fallbackName: "Twenty Diffs", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Twenty Diffs", layout: .init())
         project.customDirectory = directory.path
         let initial = (0..<1_000).map { "let value\($0) = \($0) // 中文 🪨\n" }.joined()
         var scrollViews: [NSScrollView] = []
@@ -3053,7 +3053,7 @@ final class NativeDiffTabTests: XCTestCase {
         lines[12_000] = "let value12000 = 42\n"
         try Data(lines.joined().utf8).write(to: file)
 
-        let project = Project(fallbackName: "Git", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Git", layout: .init())
         project.customDirectory = directory.path
         project.openDiff(repoRoot: directory.path, path: "reopen.swift", staged: false,
                          untracked: false, origPath: nil, activating: false)
@@ -5695,7 +5695,7 @@ final class NativeDiffTabTests: XCTestCase {
                                    untracked: true, origPath: nil, backend: backend,
                                    workspaceIdentity: nil, preferences: try isolatedPreferences())
                 try await wait { diff.canPresentNativeContent }
-                let project = Project(fallbackName: "Diff close", workspaceConfiguration: .standard)
+                let project = Project(fallbackName: "Diff close", layout: .init())
                 let tab = PaneTab(content: .diff(diff))
                 project.append(tab)
 
@@ -5737,7 +5737,7 @@ final class NativeDiffTabTests: XCTestCase {
         let app = WorkspaceApplication()
         let manager = app.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "diff safety", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "diff safety", layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
         project.append(PaneTab(content: .diff(diff)))
@@ -6942,7 +6942,7 @@ final class NativeDiffTabTests: XCTestCase {
 
         let outdated = Task { await diff.save() }
         try await wait { await backend.writing }
-        let project = Project(fallbackName: "offline", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "offline", layout: .init())
         diff.reevaluateWorkspace(in: project)
         await backend.finishWrite()
         await outdated.value
@@ -8775,7 +8775,7 @@ final class NativeDiffTabTests: XCTestCase {
         let application = WorkspaceApplication()
         let manager = application.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "Diff menu", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Diff menu", layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
 
@@ -8822,7 +8822,7 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertTrue(manager.diffLayoutTarget === recentDiff,
                       "When multiple Diffs exist, the most recently selected one owns the menu")
 
-        let other = Project(fallbackName: "other", workspaceConfiguration: .standard)
+        let other = Project(fallbackName: "other", layout: manager.dockLayout)
         manager.projects.append(other)
         manager.selectedProjectID = other.id
         XCTAssertNil(manager.diffLayoutTarget,
@@ -8989,7 +8989,7 @@ final class NativeDiffTabTests: XCTestCase {
         await backend.pauseOneRead()
         diff.reload()
         try await wait { await backend.reading }
-        let project = Project(fallbackName: "disconnected", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "disconnected", layout: .init())
         diff.reevaluateWorkspace(in: project)
         await backend.finishRead(with: Data("outdated before outage".utf8))
         try await Task.sleep(for: .milliseconds(60))

@@ -163,7 +163,7 @@ final class DelimitedTableIndexTests: XCTestCase {
         let path = directory.appendingPathComponent("table.TSV")
         let bytes = Data("item\tvalue\r\n青🧪\t42\r\n".utf8)
         try bytes.write(to: path)
-        let project = Project(fallbackName: "Table preview", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Table preview", layout: .init())
         project.openLocalFile(path.path)
         let tab = try XCTUnwrap(project.tabs.first)
         guard case .file(let file) = tab.content else { return XCTFail("Expected file tab") }
@@ -188,7 +188,7 @@ final class DelimitedTableIndexTests: XCTestCase {
         let destination = directory.appendingPathComponent("values.txt")
         let bytes = Data("Name,Value\na,2\n".utf8)
         try bytes.write(to: path)
-        let project = Project(fallbackName: "Restored table", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Restored table", layout: .init())
         let tab = project.restoreTab(from: .init(content: .file(path: path.path, editorState: nil)))
         guard case .file(let file) = tab.content else { return XCTFail("Expected restored file") }
         guard case .loading = file.content else { return XCTFail("Restore must keep file IO lazy") }
@@ -728,7 +728,7 @@ final class DelimitedTableIndexTests: XCTestCase {
         let source = directory.appendingPathComponent("close.csv")
         let bytes = Data(String(repeating: "part,😀\r\n", count: 100_000).utf8)
         try bytes.write(to: source)
-        let project = Project(fallbackName: "CSV close", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "CSV close", layout: .init())
         project.openLocalFile(source.path)
         guard let selected = project.tabs.first, case .file(let file) = selected.content else {
             return XCTFail("Opening a file must create the real project tab")

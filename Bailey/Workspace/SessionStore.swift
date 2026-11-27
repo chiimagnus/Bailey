@@ -22,8 +22,8 @@ struct SessionSnapshot: Codable {
             var content: ContentSnapshot
             var historyKey: String?
             var contextSessionIndex: Int?
-            /// True only for a Mac file tab; absent in snapshots saved before P4.
-            var localFile: Bool? = nil
+            /// True only for a Mac file tab.
+            var localFile = false
         }
 
         /// Root chosen when the project was added.
@@ -32,11 +32,12 @@ struct SessionSnapshot: Codable {
         var pinnedFile: String?
         var tabs: [TabSnapshot]
         var selectedTabIndex: Int?
-        var dock: DockSavedNode
+        var groups: [DockSavedGroup]
     }
 
     var projects: [ProjectSnapshot]
     var selectedProjectIndex: Int?
+    var layout: DockNode
 }
 
 /// Persisted top level: one `SessionSnapshot` per open window, in
