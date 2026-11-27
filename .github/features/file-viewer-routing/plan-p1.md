@@ -50,7 +50,7 @@ Markdown PR #101 已在 `main` 的 `4f336b88` 合并；所有后续格式直接�
 - [TextFileSaveErrorHandler](https://github.com/microsoft/vscode/blob/d0ba83679483e1fd146517a8e62282ee32c0f4ec/src/vs/workbench/contrib/files/browser/editors/textFileSaveErrorHandler.ts#L110-L136)：遇到 `FILE_MODIFIED_SINCE` 提供比较与显式覆盖，
   [冲突接受或回退](https://github.com/microsoft/vscode/blob/d0ba83679483e1fd146517a8e62282ee32c0f4ec/src/vs/workbench/contrib/files/browser/editors/textFileSaveErrorHandler.ts#L410-L442)由用户明确选择。
 
-**落地：**在 [CSV P2-T2](../csv-table-view/plan-p2.md#p2-t2) 核对并吸收这套行为，
+**落地：**已完成的 CSV P2-T2 核对并吸收这套行为，
 统一到 `FileTab.save`／`WorkspaceFileVersion`／`WorkspaceBackend.write(ifUnchanged:)`、
 `LocalWorkspaceBackend` 与 `SSHWorkspaceBackend`，同步 `DiffTab`、图像旁车和确认导出。
 比较冲突优先复用现有 Diff 与原生错误／确认入口，先核对实际可用能力，再做必要的最小改动；
@@ -63,7 +63,7 @@ Markdown PR #101 已在 `main` 的 `4f336b88` 合并；所有后续格式直接�
 保存中继续输入、断线／重连、比较、显式覆盖／取消、关闭否决及重试。
 逐项核对原磁盘、冲突版本、草稿、提示及最终字节；不得让旧确认覆盖新版本。
 VS Code 的分离版本检查和 rename 不等于严格 CAS；现有平台实测边界见
-[CSV P2 审计](../csv-table-view/audit-p2.md#发现-f-02)。不再凭空尝试更多假锁或重复检查；
+CSV P2 审计 F-02（Git 历史 `a54b8ace:.github/features/csv-table-view/audit-p2.md`）。不再凭空尝试更多假锁或重复检查；
 严格非协作 CAS 如仍不成立，保留未满足项及安全恢复边界，不能以复刻 VS Code 自动核销。
 
 ## 任务
@@ -121,8 +121,8 @@ VS Code 的分离版本检查和 rename 不等于严格 CAS；现有平台实测
 全七份计划统一采用下方[本轮验收环境](#acceptance-environment)。
 
 此计划与**下一种格式的首个接入任务共同执行**，不作为单独“框架项目”先行。
-CSV 的字段索引不依赖图形视口，先以 [CSV P1-T2](../csv-table-view/plan-p1.md#p1-t2)
-接入原生表格，同时完成路由 P1-T2 的通用化及旧分支替换。
+CSV 的字段索引不依赖图形视口；已随原生表格接入完成路由 P1-T2 的通用化及旧分支替换。
+当前表格契约见[编辑器文档](../../../docs/features/editor.md#csvtsv-表格)。
 SVG／HTML 后续使用同一模式；SVG 的图形能力仍依赖图片共用视口。
 音频 P1 首次复用 AVAsset，视频 P1 首次共用 AVPlayerView。
 这些是依赖关系而非额外大阶段；已验证的功能可按实际准备情况并行。
@@ -178,7 +178,7 @@ SVG／HTML 后续使用同一模式；SVG 的图形能力仍依赖图片共用�
 | 事项 | 唯一实施／验收归属 | 调用者需证明的结果 |
 | --- | --- | --- |
 | R02–R05、R07、R09、R10 公共读取／身份／授权／资源生命周期 | 本计划 P1-T1；R08 公共模式与窗口菜单为 P1-T2 | 各格式使用同一 FileTab 和真实后端；自己的读取／展示结果正确。 |
-| R06 条件保存、冲突比较／显式覆盖、非协作 CAS 边界 | [CSV P2-T2](../csv-table-view/plan-p2.md#p2-t2) 负责共享后端、FileTab 与 DiffTab；原边界不豁免。 | 各格式保留草稿、实际字节、失败拒绝及正确目标；标注另验底图／旁车配对；HTML 另验拒绝执行非授权版本。SVG 新文件独占导出不涉及条件覆盖。 |
+| R06 条件保存、冲突比较／显式覆盖、非协作 CAS 边界 | 已完成的 CSV P2-T2 负责共享后端、FileTab 与 DiffTab；现行契约见[保存与关闭](../../../docs/features/editor.md#保存与关闭)，原边界不豁免。 | 各格式保留草稿、实际字节、失败拒绝及正确目标；标注另验底图／旁车配对；HTML 另验拒绝执行非授权版本。SVG 新文件独占导出不涉及条件覆盖。 |
 | R01／R08 共用图形手势、倍率与无障碍 | [图片 P1-T1](../image-annotations/plan-p1.md#p1-t1) 实测共用视口手势；SVG 核对自己的矢量几何、焦点及原生动作。 | 同一底层手势不分别重复测完整矩阵；独特的标注、SVG、表格和 WebKit 控件仍核对实际 AX 语义及操作结果。 |
 | R01／R08 原生文字 IME 与焦点 | CSV 网格、图片标注各验独有输入；SVG／HTML 共享 TextKit，连续并排组合可用同一场隔离 App 验收。 | 自动选择系统拼音输入源，确认隔离 App 与控件持有真实焦点，发送字母键和候选确认（不重新激活窗口、不直接粘贴中文）；断言组合期磁盘字节、候选、连续 Undo／Redo、最终保存及对应预览。退出恢复原输入源，不依赖用户人工输入。 |
 | R09／R11 音视频生命周期、真实睡眠、内置声音与设备 | [音频 P2-T2](../audio-file-playback/plan-p2.md#p2-t2) 和 [视频 P2-T2](../video-file-playback/plan-p2.md#p2-t2) 共享一次混合媒体实测；各任务保留自身结果。 | 两类播放器均核对暂停、定位、换源与资源退役；视频另验画面，音频另验紧凑控件。 |
