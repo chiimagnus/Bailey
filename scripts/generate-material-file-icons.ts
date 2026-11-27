@@ -41,7 +41,7 @@ const { fileIcons } = await import(
 // Upstream orders broadly useful file types first. Start from that core, then
 // trade niche or obsolete entries for common modern languages, build tools,
 // frameworks, infrastructure formats, and agent instruction files found later
-// in the catalog. The fallback file glyph counts as one of the 300 icons.
+// in the catalog. Include a fallback glyph for unknown file types.
 const excludedFromUpstreamCore = new Set([
   'adobe-swc',
   'angular-component',
@@ -284,15 +284,28 @@ const selectedIcons = fileIcons.icons.filter((icon: { name: string }) =>
   (upstreamCoreNames.has(icon.name) && !excludedFromUpstreamCore.has(icon.name))
   || addedCuratedIcons.has(icon.name),
 );
-const curatedIconCount = selectedIcons.length + 1;
-if (curatedIconCount !== 300) {
-  throw new Error(
-    `Curated catalog must contain 300 logical icons, got ${curatedIconCount} `
-      + `(${selectedIcons.length} specific plus fallback).`,
-  );
+// Reproduce the default Angular-pack mappings, using later upstream entries to
+// resolve conflicts exactly as the extension generator does.
+const fileNames = new Map<string, string>();
+const fileExtensions = new Map<string, string>();
+for (const icon of selectedIcons) {
+  if (icon.disabled) continue;
+  if (icon.enabledFor && !icon.enabledFor.includes('angular')) continue;
+  for (const name of icon.fileNames ?? []) {
+    fileNames.set(name.toLowerCase(), icon.name);
+  }
+  for (const extension of icon.fileExtensions ?? []) {
+    fileExtensions.set(extension.toLowerCase(), icon.name);
+  }
 }
 
-for (const icon of selectedIcons) {
+// Only the final mapping can make an icon reachable. Disabled candidates and
+// overridden aliases must not leave unused SVGs in the app bundle.
+const mappedIconNames = new Set([...fileNames.values(), ...fileExtensions.values()]);
+const bundledIcons = selectedIcons.filter(icon => mappedIconNames.has(icon.name));
+const curatedIconCount = bundledIcons.length + 1;
+
+for (const icon of bundledIcons) {
   if (icon.clone) {
     throw new Error(`Curated icon ${icon.name} is a generated clone, not a vendorable SVG.`);
   }
@@ -318,7 +331,7 @@ writeFileSync(
 );
 
 const lightIconNames: string[] = [];
-for (const icon of selectedIcons) {
+for (const icon of bundledIcons) {
   copyFileSync(
     join(iconSourceDirectory, `${icon.name}.svg`),
     join(outputDirectory, `${resourcePrefix}${icon.name}.svg`),
@@ -342,23 +355,8 @@ writeFileSync(
   `Material Icon Theme ${upstreamVersion}\n`
     + `Source: https://github.com/PKief/vscode-material-icon-theme\n`
     + `Pinned commit: ${upstreamCommit}\n`
-    + 'Bailey includes a curated catalog of 300 logical file icons.\n',
+    + `Bailey includes a curated catalog of ${curatedIconCount} logical file icons.\n`,
 );
-
-// Reproduce the default Angular-pack mappings, using later upstream entries to
-// resolve conflicts exactly as the extension generator does.
-const fileNames = new Map<string, string>();
-const fileExtensions = new Map<string, string>();
-for (const icon of selectedIcons) {
-  if (icon.disabled) continue;
-  if (icon.enabledFor && !icon.enabledFor.includes('angular')) continue;
-  for (const name of icon.fileNames ?? []) {
-    fileNames.set(name.toLowerCase(), icon.name);
-  }
-  for (const extension of icon.fileExtensions ?? []) {
-    fileExtensions.set(extension.toLowerCase(), icon.name);
-  }
-}
 
 const swiftString = (value: string) => JSON.stringify(value);
 const swiftDictionary = (values: Map<string, string>) =>

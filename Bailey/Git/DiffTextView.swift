@@ -577,7 +577,6 @@ final class DiffTextView: NativeCodeTextView, NSTextLayoutManagerDelegate {
             : (foldedGitLines?.lineCount ?? 0)
                 - (storage.mutableString.character(at: storage.length - 1) == 10 ? 1 : 0)
     }
-    var liveGitLineCount: Int? { foldedGitLines?.lineCount }
     func liveGitLine(atUTF16 offset: Int) -> Int? { foldedGitLines?.row(at: offset) }
     func liveGitOffset(forLine line: Int) -> Int? {
         guard let foldedGitLines, line >= 0, line < foldedGitLines.lineCount else { return nil }

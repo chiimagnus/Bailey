@@ -174,7 +174,7 @@ Diff 共享系统 NSTextView/TextKit 2；不使用 WebKit 或另一个文本渲�
 
 文件图标与 Swift 查询表
 由 [generate-material-file-icons.ts](../scripts/generate-material-file-icons.ts)
-一起生成。按脚本指定的 Material Icon Theme 版本和提交准备上游源码，使用已有 Bun 环境：
+一起生成，仅打包最终查询表引用的图标及其浅色变体。按脚本指定的 Material Icon Theme 版本和提交准备上游源码，使用已有 Bun 环境：
 
 ```sh
 bun scripts/generate-material-file-icons.ts /path/to/vscode-material-icon-theme
