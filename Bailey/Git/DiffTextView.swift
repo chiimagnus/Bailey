@@ -1871,7 +1871,6 @@ final class DiffCodePaneView: NSView {
         textView.highlightSelectedLine = false
         textView.showsLineNumbers = false
         textView.configureWrapping(false, viewportWidth: scrollView.contentView.bounds.width)
-        textView.isIncrementalSearchingEnabled = true
         underlay.textView = textView
         underlay.clipView = scrollView.contentView
         foldOverlay.textView = textView

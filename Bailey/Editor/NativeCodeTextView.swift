@@ -28,6 +28,7 @@ class NativeCodeTextView: NSTextView {
         let stops = NSParagraphStyle.default.tabStops
         return stops.count > 1 ? stops[1].location - stops[0].location : 28
     }()
+    weak var findOwner: TextFind?
     private let documentUndoManager: UndoManager
     override var undoManager: UndoManager? { documentUndoManager }
     var text: String? {
@@ -127,6 +128,7 @@ class NativeCodeTextView: NSTextView {
             self?.replaceDocumentText(in: storage, at: location,
                                       expecting: replacement, with: expected)
         }
+        pendingCharacterReplacement = nil
         storage.replaceCharacters(in: range, with: replacement)
     }
 
@@ -141,7 +143,9 @@ class NativeCodeTextView: NSTextView {
     func retireNativeDocument() {
         guard !nativeDocumentRetired else { return }
         nativeDocumentRetired = true
+        findOwner?.detach(from: self)
         composition = nil
+        pendingCharacterReplacement = nil
         isEditable = false
         isSelectable = false
         breakUndoCoalescing()
@@ -268,7 +272,14 @@ class NativeCodeTextView: NSTextView {
 
     /// Called for actual character mutations, including Undo/Redo, which do
     /// not necessarily emit NSTextViewDelegate.textDidChange.
-    var onCharacterEdit: ((NSRange, String) -> Void)?
+    struct CharacterReplacement {
+        let range: NSRange
+        let removed: String
+        let inserted: String
+        let originalLength: Int
+    }
+    var onCharacterEdit: ((NSRange, String, CharacterReplacement?) -> Void)?
+    private var pendingCharacterReplacement: CharacterReplacement?
     private var textEditObserver: (any NSObjectProtocol)?
     private struct CompositionChange {
         let range: NSRange
@@ -290,17 +301,19 @@ class NativeCodeTextView: NSTextView {
     /// document snapshot on each IME session makes one local keystroke copy GB.
     override func shouldChangeText(in affectedCharRange: NSRange,
                                    replacementString: String?) -> Bool {
+        pendingCharacterReplacement = nil
         guard super.shouldChangeText(in: affectedCharRange,
                                      replacementString: replacementString) else { return false }
-        if composition != nil, let storage = textStorage,
-           affectedCharRange.location != NSNotFound,
-           affectedCharRange.length >= 0,
+        if let storage = textStorage, affectedCharRange.location != NSNotFound,
+           affectedCharRange.location >= 0, affectedCharRange.length >= 0,
            NSMaxRange(affectedCharRange) <= storage.length {
-            composition?.pending = (
-                affectedCharRange,
-                storage.attributedSubstring(from: affectedCharRange).string,
-                storage.length
-            )
+            let removed = storage.attributedSubstring(from: affectedCharRange).string
+            if let replacementString {
+                pendingCharacterReplacement = CharacterReplacement(
+                    range: affectedCharRange, removed: removed,
+                    inserted: replacementString, originalLength: storage.length)
+            }
+            composition?.pending = (affectedCharRange, removed, storage.length)
         }
         return true
     }
@@ -507,8 +520,8 @@ class NativeCodeTextView: NSTextView {
         defaultParagraphStyle = paragraph
         minSize = NSSize(width: 1000, height: 0)
         maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        usesFindBar = true
-        isIncrementalSearchingEnabled = true
+        usesFindBar = false
+        usesFindPanel = false
         resetDocumentIndex(textStorage?.string ?? "")
         if let textStorage {
             textEditObserver = NotificationCenter.default.addObserver(
@@ -628,8 +641,86 @@ class NativeCodeTextView: NSTextView {
         return super.firstRect(forCharacterRange: range, actualRange: actualRange)
     }
 
+    private func drawFindMatches(in dirty: NSRect) {
+        guard let findOwner, findOwner.isPresented, let layout = textLayoutManager,
+              let manager = textContentStorage,
+              let viewport = layout.textViewportLayoutController.viewportRange else { return }
+        let origin = textContainerOrigin
+        let clip = dirty.intersection(visibleRect).offsetBy(dx: -origin.x, dy: -origin.y)
+        guard !clip.isEmpty else { return }
+        NSColor.systemYellow.withAlphaComponent(0.30).setFill()
+        func draw(_ range: NSRange) {
+            guard let textRange = NSTextRange(range, in: manager) else { return }
+            layout.enumerateTextSegments(in: textRange, type: .standard, options: .rangeNotRequired) { _, frame, _, _ in
+                let box = frame.offsetBy(dx: origin.x, dy: origin.y)
+                if box.intersects(dirty) { box.intersection(dirty).fill() }
+                return true
+            }
+        }
+        func drawMatches(in visible: NSRange) {
+            var pending: NSRange?
+            for match in findOwner.visibleMatches(in: visible) {
+                let range = NSIntersectionRange(match, visible)
+                guard range.length > 0 else { continue }
+                if let previous = pending {
+                    if NSMaxRange(previous) == range.location {
+                        pending = NSUnionRange(previous, range)
+                        continue
+                    }
+                    draw(previous)
+                }
+                pending = range
+            }
+            if let pending { draw(pending) }
+        }
+        // A TextKit viewport can include an entire truncated or wrapped
+        // paragraph. Only its actual visible line fragments need decoration.
+        layout.enumerateTextLayoutFragments(in: viewport) { fragment in
+            let offset = manager.offset(from: manager.documentRange.location, to: fragment.rangeInElement.location)
+            for line in fragment.textLineFragments {
+                let frame = line.typographicBounds.offsetBy(dx: fragment.layoutFragmentFrame.minX,
+                                                           dy: fragment.layoutFragmentFrame.minY)
+                let visible = frame.intersection(clip)
+                guard !visible.isEmpty, line.characterRange.length > 0 else { continue }
+                let full = NSRange(location: offset + line.characterRange.location, length: line.characterRange.length)
+                // Native visual selection maps the clipped horizontal band to
+                // document ranges, including bidirectional glyph runs. Expand
+                // the band slightly to retain partially visible edge glyphs.
+                if full.length > 4_096, visible.width < frame.width {
+                    let padding = (font?.pointSize ?? 13) * 2
+                    let left = NSPoint(x: max(frame.minX, visible.minX - padding), y: frame.midY)
+                    let right = NSPoint(x: min(frame.maxX, visible.maxX + padding), y: frame.midY)
+                    let navigation = layout.textSelectionNavigation
+                    let bounds = frame.union(clip)
+                    let anchors = navigation.textSelections(interactingAt: left,
+                        inContainerAt: manager.documentRange.location, anchors: [],
+                        modifiers: [], selecting: false, bounds: bounds)
+                    let ranges = navigation.textSelections(interactingAt: right,
+                        inContainerAt: manager.documentRange.location, anchors: anchors,
+                        modifiers: [.extend, .visual, .multiple], selecting: true, bounds: bounds)
+                        .flatMap(\.textRanges)
+                        .map { NSIntersectionRange(NSRange($0, in: manager), full) }
+                        .filter { $0.length > 0 }
+                    if !ranges.isEmpty {
+                        for range in ranges { drawMatches(in: range) }
+                        continue
+                    }
+                }
+                drawMatches(in: full)
+            }
+            return true
+        }
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        if let findOwner, findOwner.isPresented, !hasMarkedText() {
+            findOwner.dismiss()
+        } else { super.cancelOperation(sender) }
+    }
+
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
+        defer { drawFindMatches(in: rect) }
         guard highlightSelectedLine, selectedRange().length == 0,
               let manager = textContentStorage, let layout = textLayoutManager else { return }
         if manager.documentRange.isEmpty {
@@ -853,6 +944,8 @@ class NativeCodeTextView: NSTextView {
 
     private func processStorageEdit(_ storage: NSTextStorage) {
         guard storage.editedMask.contains(.editedCharacters) else { return }
+        let pending = pendingCharacterReplacement
+        pendingCharacterReplacement = nil
         if syntaxSuspended, syntaxConfiguration != nil { syntaxNeedsRepaint = true }
         let edited = storage.editedRange
         let priorLength = edited.length - storage.changeInLength
@@ -860,10 +953,27 @@ class NativeCodeTextView: NSTextView {
               priorLength >= 0, NSMaxRange(edited) <= storage.length else {
             resetDocumentIndex(storage.string)
             updateGutter()
+            findOwner?.documentChanged(in: self)
             return
         }
         let previousRange = NSRange(location: edited.location, length: priorLength)
         let replacement = storage.attributedSubstring(from: edited).string
+        // TextKit 2 may report the entire paragraph. Validate the pre-edit
+        // range and bytes once for every consumer of the actual replacement.
+        let precise: CharacterReplacement?
+        if let pending, previousRange.location <= pending.range.location,
+           NSMaxRange(previousRange) >= NSMaxRange(pending.range),
+           pending.originalLength == storage.length - storage.changeInLength,
+           storage.changeInLength == pending.inserted.utf16.count - pending.range.length,
+           NSMaxRange(NSRange(location: pending.range.location,
+                              length: pending.inserted.utf16.count)) <= storage.length,
+           storage.attributedSubstring(from: NSRange(location: pending.range.location,
+                                                      length: pending.inserted.utf16.count))
+               .string.utf8.elementsEqual(pending.inserted.utf8) {
+            precise = pending
+        } else {
+            precise = nil
+        }
         // The edited range covers an entire paragraph on preloaded TextKit 2
         // storage. Recover the actual IME replacement from its pre-edit range
         // and the document-length delta, not from that paragraph-wide range.
@@ -914,7 +1024,9 @@ class NativeCodeTextView: NSTextView {
         storageCharactersDidChange(in: previousRange, replacement: replacement,
                                    nativeParagraphGeometryChanged: previousParagraphCount != lineIndex?.lineCount
                                        || previousNativeOnlySeparators != lineIndex?.hasNativeOnlySeparators)
-        onCharacterEdit?(previousRange, replacement)
+        onCharacterEdit?(previousRange, replacement, precise)
+        findOwner?.documentChanged(in: self, previousRange: precise?.range ?? previousRange,
+                                   insertedLength: precise?.inserted.utf16.count ?? edited.length)
     }
 
     /// Subclasses receive actual Undo/Redo and IME edits plus native paragraph

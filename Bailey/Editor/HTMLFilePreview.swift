@@ -24,12 +24,12 @@ struct HTMLFilePreview: View {
                         Button(String(localized: "Show Source", table: "Editor"), action: onShowSource)
                     }
                 } else {
-                    VStack(spacing: 0) {
-                        if preview.showsFind {
-                            HTMLPreviewFindBar(preview: preview, canFocus: canFocus, onFocused: onFocused)
+                    HTMLPreviewMount(preview: preview, onFocused: onFocused)
+                        .overlay(alignment: .topTrailing) {
+                            if preview.showsFind {
+                                HTMLPreviewFindBar(preview: preview, canFocus: canFocus, onFocused: onFocused)
+                            }
                         }
-                        HTMLPreviewMount(preview: preview, onFocused: onFocused)
-                    }
                 }
             } else {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -45,59 +45,24 @@ private struct HTMLPreviewFindBar: View {
     @Bindable var preview: HTMLPreview
     let canFocus: () -> Bool
     let onFocused: () -> Void
-    @FocusState private var fieldFocused: Bool
 
     var body: some View {
-        HStack(spacing: 6) {
-            TextField(String(localized: "Find", table: "Terminal"), text: $preview.findQuery)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityIdentifier("bailey.html.find")
-                .focused($fieldFocused)
-                .onKeyPress(keys: [.return], phases: .down) { press in
-                    preview.performFindAction(press.modifiers.contains(.shift) ? .previous : .next)
-                    return .handled
-                }
-                .frame(minWidth: 0, maxWidth: .infinity)
-            if preview.findMatchFound == false {
-                Image(systemName: "exclamationmark.circle")
-                    .foregroundStyle(.secondary)
-                    .help(String(localized: "No matches", table: "Interface"))
-                    .accessibilityLabel(Text("No matches", tableName: "Interface"))
-            }
-            Button { preview.performFindAction(.previous) } label: { Image(systemName: "chevron.up") }
-                .accessibilityLabel(Text("Previous match", tableName: "Terminal"))
-                .disabled(preview.findQuery.isEmpty)
-            Button { preview.performFindAction(.next) } label: { Image(systemName: "chevron.down") }
-                .accessibilityLabel(Text("Next match", tableName: "Terminal"))
-                .disabled(preview.findQuery.isEmpty)
-            Button { preview.performFindAction(.hide) } label: { Image(systemName: "xmark") }
-                .accessibilityLabel(Text("Close"))
-        }
-        .buttonStyle(.borderless)
-        .padding(6)
-        .background(.regularMaterial)
-        .onKeyPress(.escape) { preview.performFindAction(.hide); return .handled }
-        .onAppear { focusField() }
-        .onChange(of: preview.findFocusRequest) { focusField() }
-        .onChange(of: fieldFocused) { if fieldFocused { onFocused() } }
-        .onDisappear {
-            DispatchQueue.main.async {
-                guard !preview.showsFind, canFocus(), NSApp.isActive,
-                      let window = preview.webView.window, window.isKeyWindow else { return }
-                window.makeFirstResponder(preview.webView)
-            }
-        }
-    }
-
-    private func focusField() {
-        DispatchQueue.main.async {
-            guard preview.showsFind, canFocus() else { return }
-            fieldFocused = true
-            DispatchQueue.main.async {
-                guard fieldFocused, preview.showsFind, canFocus() else { return }
-                NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
-            }
-        }
+        FindWidget(query: $preview.findQuery,
+                   count: preview.findMatchFound == false ? String(localized: "No matches", table: "Interface") : "",
+                   hasMatches: !preview.findQuery.isEmpty && preview.findMatchFound != false,
+                   noResults: preview.findMatchFound == false,
+                   focusRequest: preview.findFocusRequest,
+                   canFocus: { preview.showsFind && canFocus() && preview.webView.window?.isKeyWindow == true }, onFocused: onFocused,
+                   navigate: preview.navigateFind,
+                   dismiss: preview.dismissFind,
+                   restoreFocus: {
+                       DispatchQueue.main.async {
+                           guard !preview.showsFind, canFocus(), NSApp.isActive,
+                                 let window = preview.webView.window, window.isKeyWindow else { return }
+                           window.makeFirstResponder(preview.webView)
+                       }
+                   },
+                   options: { EmptyView() }, replacement: { _, _ in EmptyView() })
     }
 }
 
@@ -185,7 +150,7 @@ final class HTMLPreview: NSObject, WKNavigationDelegate {
 
     private enum FindRequest {
         case match(String, backwards: Bool)
-        case selection
+        case selection(restart: Bool)
     }
 
     @ObservationIgnored private var findGeneration: UInt = 0
@@ -286,28 +251,25 @@ final class HTMLPreview: NSObject, WKNavigationDelegate {
         return Data(text.utf8)
     }
 
-    func performFindAction(_ action: FindAction) {
+    func presentFind() {
         guard !failed, webView.window != nil, webView.navigationDelegate === self else { return }
-        switch action {
-        case .show:
-            if !showsFind {
-                showsFind = true
-                if !findQuery.isEmpty { enqueueFind(.match(findQuery, backwards: false)) }
-            }
-            findFocusRequest &+= 1
-        case .hide:
-            showsFind = false
-            invalidateFind()
-        case .next, .previous:
-            guard !findQuery.isEmpty else { performFindAction(.show); return }
-            showsFind = true
-            enqueueFind(.match(findQuery, backwards: action == .previous))
-        case .useSelection:
-            invalidateFind()
-            enqueueFind(.selection)
-        case .replace:
-            break
+        let wasPresented = showsFind
+        let responder = webView.window?.firstResponder as? NSView
+        showsFind = true
+        if !wasPresented || responder?.isDescendant(of: webView) == true {
+            enqueueFind(.selection(restart: !wasPresented))
         }
+        findFocusRequest &+= 1
+    }
+
+    func dismissFind() {
+        showsFind = false
+        invalidateFind()
+    }
+
+    func navigateFind(forward: Bool) {
+        guard showsFind, !findQuery.isEmpty else { return }
+        enqueueFind(.match(findQuery, backwards: !forward))
     }
 
     /// WebKit changes its own page selection while finding. Serialize its
@@ -326,18 +288,39 @@ final class HTMLPreview: NSObject, WKNavigationDelegate {
                 configuration.wraps = true
                 let found = try? await webView.find(query, configuration: configuration).matchFound
                 guard !Task.isCancelled, findGeneration == generation else { return }
+                if found == true {
+                    // WebKit's native Find selects its result in the page. Keep
+                    // its range in the isolated client world, not in the document.
+                    _ = try? await webView.evaluateJavaScript("""
+                        (() => {
+                            const selection = window.getSelection();
+                            window.baileyFindMatchRange = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
+                        })()
+                        """, contentWorld: .defaultClient)
+                }
+                guard !Task.isCancelled, findGeneration == generation else { return }
                 findMatchFound = found
-            case .selection:
-                let selected = try? await webView.evaluateJavaScript(
-                    "window.getSelection()?.toString() ?? ''", contentWorld: .defaultClient
-                ) as? String
-                guard !Task.isCancelled, findGeneration == generation,
-                      let selected, !selected.isEmpty else { return }
-                let wasPresented = showsFind
-                showsFind = true
+            case .selection(let restart):
+                let selected = try? await webView.evaluateJavaScript("""
+                    (() => {
+                        const selection = window.getSelection();
+                        if (!selection?.rangeCount || selection.isCollapsed) return '';
+                        const range = selection.getRangeAt(0);
+                        const match = window.baileyFindMatchRange;
+                        if (match && range.startContainer === match.startContainer &&
+                            range.startOffset === match.startOffset && range.endContainer === match.endContainer &&
+                            range.endOffset === match.endOffset) return '';
+                        return selection.toString();
+                    })()
+                    """, contentWorld: .defaultClient) as? String
+                guard !Task.isCancelled, findGeneration == generation, showsFind else { return }
+                guard let selected, !selected.isEmpty, selected.utf16.count < 524_288,
+                      !selected.contains(where: \.isNewline) else {
+                    if restart, !findQuery.isEmpty { enqueueFind(.match(findQuery, backwards: false)) }
+                    return
+                }
                 if findQuery == selected { findMatchFound = true }
                 else { findQuery = selected }
-                if !wasPresented { findFocusRequest &+= 1 }
             }
         }
     }

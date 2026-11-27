@@ -182,6 +182,7 @@ final class CSVPreviewUITests: XCTestCase {
     }
 
     func testSortingFilteringFindingAndCopyingUseDisplayedCellsWithoutWritingSource() throws {
+        continueAfterFailure = false
         let fixture = try WorkspaceUITestFixture(in: self)
         let original = "Name,Group,Value\r\nItem 10,equipe,orange\r\nItem 2,Équipe,blue\r\nOther,elsewhere,green\r\n"
         let file = try fixture.file("samples.csv", text: original)
@@ -220,6 +221,7 @@ final class CSVPreviewUITests: XCTestCase {
         let filter = app.textFields["bailey.csv.filter"]
         XCTAssertTrue(filter.waitForExistence(timeout: 5))
         filter.click()
+        try WorkspaceUITestSupport.selectASCIIInputSource()
         filter.typeText("equipe\n")
         XCTAssertTrue(table.staticTexts["Other"].waitForNonExistence(timeout: 8))
         XCTAssertTrue(two.exists)
@@ -227,13 +229,20 @@ final class CSVPreviewUITests: XCTestCase {
 
         two.click()
         app.typeKey("f", modifierFlags: .command)
-        let find = app.textFields["bailey.csv.find"]
+        let find = app.textFields["bailey.find.query"]
         XCTAssertTrue(find.waitForExistence(timeout: 5))
+        XCTAssertEqual(find.value as? String, "Item 2")
+        ten.click()
+        app.typeKey("f", modifierFlags: .command)
+        XCTAssertEqual(find.value as? String, "Item 10")
+        find.click()
+        find.typeKey("a", modifierFlags: .command)
+        try WorkspaceUITestSupport.selectASCIIInputSource()
         find.typeText("blue")
         XCTAssertEqual(find.value as? String, "blue")
-        let count = app.staticTexts["bailey.csv.match-count"]
+        let count = app.staticTexts["bailey.find.count"]
         let found = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value == %@ OR label == %@", "1", "1"), object: count
+            predicate: NSPredicate(format: "value == %@ OR label == %@", "1 of 1", "1 of 1"), object: count
         )
         XCTAssertEqual(XCTWaiter.wait(for: [found], timeout: 5), .completed, count.debugDescription)
         app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
@@ -704,19 +713,23 @@ final class CSVPreviewUITests: XCTestCase {
         app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
         XCTAssertTrue(filter.waitForNonExistence(timeout: 5))
         XCTAssertEqual(try Data(contentsOf: file), Data(original.utf8))
-        let find = app.textFields["bailey.csv.find"]
+        let find = app.textFields["bailey.find.query"]
 
         table.staticTexts["old old"].click()
-        app.typeKey("f", modifierFlags: [.command, .option])
+        app.typeKey("f", modifierFlags: .command)
         XCTAssertTrue(find.waitForExistence(timeout: 5))
+        app.buttons["bailey.find.replace-toggle"].click()
         find.click()
+        find.typeKey("a", modifierFlags: .command)
+        try WorkspaceUITestSupport.selectASCIIInputSource()
         find.typeText("old")
-        let replacement = app.textFields["bailey.csv.replacement"]
+        let replacement = app.textFields["bailey.find.replacement"]
         XCTAssertTrue(replacement.waitForExistence(timeout: 5))
         replacement.click()
+        try WorkspaceUITestSupport.selectASCIIInputSource()
         replacement.typeText("new")
-        let replace = app.buttons["Replace"].firstMatch
-        let replaceAll = app.buttons["Replace All"].firstMatch
+        let replace = app.buttons["bailey.find.replace"].firstMatch
+        let replaceAll = app.buttons["bailey.find.replace-all"].firstMatch
         let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: replace)
         XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed, app.debugDescription)
         replace.click()
@@ -727,7 +740,7 @@ final class CSVPreviewUITests: XCTestCase {
         XCTAssertTrue(table.staticTexts["new new"].waitForExistence(timeout: 8))
         app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
         // Closing the overlay through its actual button works even if it owns focus.
-        if find.exists { app.buttons["Close"].firstMatch.click() }
+        if find.exists { app.buttons["bailey.find.close"].firstMatch.click() }
         table.staticTexts["new new"].click()
         app.typeKey("s", modifierFlags: .command)
         let expected = original.replacingOccurrences(of: "old", with: "new")
@@ -765,35 +778,27 @@ final class CSVPreviewUITests: XCTestCase {
         let firstVisible = Date()
         first.click()
         app.typeKey("f", modifierFlags: .command)
-        let find = app.textFields["bailey.csv.find"]
+        let find = app.textFields["bailey.find.query"]
         XCTAssertTrue(find.waitForExistence(timeout: 5))
         let searching = Date()
+        find.click()
+        find.typeKey("a", modifierFlags: .command)
         find.typeText("100000")
-        let count = app.staticTexts["bailey.csv.match-count"]
+        let count = app.staticTexts["bailey.find.count"]
         let matched = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            String(describing: count.value ?? "") == "1"
+            String(describing: count.value ?? "") == "1 of 1"
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [matched], timeout: 15), .completed)
         XCTAssertEqual(find.value as? String, "100000")
         app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
         XCTAssertTrue(find.waitForNonExistence(timeout: 5))
-        // The macOS AX snapshot enumerates only the first 1000 rows even
-        // after NSTableView has revealed row 99999. Use the actual scroll
-        // offset/row stride to address the last visible cell, not an AX query
-        // that can never reach it. The saved bytes prove the exact row edited.
-        let rows = table.descendants(matching: .tableRow)
-        let rowStride = rows.element(boundBy: 1).frame.minY - rows.element(boundBy: 0).frame.minY
-        XCTAssertGreaterThan(rowStride, 0)
-        let firstFrame = first.frame
-        let target = CGPoint(x: firstFrame.midX, y: firstFrame.midY + rowStride * 99_999)
-        XCTAssertTrue(table.frame.contains(target), "Find must reveal the actual last row: \(target), table \(table.frame)")
+        // Find must reveal and select the actual last record. The native
+        // grid's Return action edits its caret; it also proves closing the
+        // overlay restored keyboard focus. Do not enumerate offscreen AX rows.
         let lastVisible = Date()
-        let lastCell = table.coordinate(withNormalizedOffset: .zero).withOffset(
-            CGVector(dx: target.x - table.frame.minX, dy: target.y - table.frame.minY)
-        )
-        lastCell.doubleClick()
-        app.typeText("100001")
-        app.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
+        window.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
+        window.typeText("100001")
+        window.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
         let editVisible = Date()
         app.typeKey("s", modifierFlags: .command)
         let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in

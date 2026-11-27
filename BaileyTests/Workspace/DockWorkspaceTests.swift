@@ -1045,7 +1045,6 @@ final class DockWorkspaceTests: XCTestCase {
             XCTAssertEqual(project.selectedTabID, workID)
             XCTAssertFalse(manager.hasSelectedBrowser)
             XCTAssertFalse(manager.canFind)
-            XCTAssertFalse(manager.canReplace)
             XCTAssertFalse(manager.canClearActiveTerminal)
             XCTAssertFalse(manager.canSaveSelectedFile)
             manager.closeActivePanelOrWindow()

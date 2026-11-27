@@ -20,7 +20,8 @@ final class DelimitedTableControls {
     }
 
     var configuration = DelimitedTablePresentation.Configuration()
-    var query = ""
+    var query = "" { didSet { if query != oldValue { matchPosition = nil } } }
+    var matchPosition: Int?
     var showsFind = false
     var showsReplace = false
     var findFocus = 0
@@ -80,22 +81,21 @@ final class DelimitedTableControls {
         parsed = nil
     }
 
-    func perform(_ action: FindAction) {
-        switch action {
-        case .show:
-            showsFind = true
-            showsReplace = false
-            findFocus &+= 1
-        case .hide: showsFind = false
-        case .next: findStep &+= 1
-        case .previous: findStep &-= 1
-        case .useSelection:
-            if let value = grid?.selectedFieldValue(), !value.isEmpty { query = value }
-        case .replace:
-            showsFind = true
-            showsReplace = true
-            findFocus &+= 1
-        }
+    func presentFind() {
+        if let value = grid?.selectedFieldValue(requireFocus: showsFind),
+           !value.isEmpty, value.utf16.count < 524_288,
+           !value.contains(where: \.isNewline) { query = value }
+        showsFind = true
+        findFocus &+= 1
+    }
+
+    func dismissFind() {
+        showsFind = false
+        matchPosition = nil
+    }
+
+    func navigateFind(forward: Bool) {
+        if forward { findStep &+= 1 } else { findStep &-= 1 }
     }
 }
 
@@ -133,8 +133,6 @@ struct CSVTableView: View {
         let previous: DelimitedTablePresentation.Occurrence
     }
 
-    private enum Input: Hashable { case find, filter }
-
     let file: FileTab
     let canFocus: () -> Bool
     let onFocused: () -> Void
@@ -150,7 +148,7 @@ struct CSVTableView: View {
     @State private var occurrenceCount: (ReplaceRequest, Int)?
     @State private var replaceCursor: ReplaceCursor?
     @State private var replaceTask: Task<Void, Never>?
-    @FocusState private var focusedInput: Input?
+    @FocusState private var filterFocused: Bool
     @Environment(\.colorScheme) private var colorScheme
 
     private var controls: DelimitedTableControls { file.delimitedTable }
@@ -162,14 +160,14 @@ struct CSVTableView: View {
         let display = DisplayRequest(parse: parse, configuration: controls.configuration)
         let snapshot = controls.parsed.flatMap { $0.parseRequest == parse ? $0 : nil }
         let active = displayed.flatMap { $0.0 == display ? $0.1 : nil }
-        let query = active.map { projection in
+        let query = (controls.showsFind && !controls.query.isEmpty ? active : nil).map { projection in
             SearchRequest(display: projection.id, query: controls.query)
         }
         let matches = search.flatMap { $0.0 == query ? $0.1 : nil }
         surface(snapshot: active == nil ? nil : snapshot, active: active, matches: matches, theme: theme,
                 failed: parseFailed == parse || displayFailed == display)
             .overlay(alignment: .topTrailing) {
-                overlay(display: display, snapshot: snapshot, active: active, matches: matches ?? [], theme: theme)
+                overlay(display: display, snapshot: snapshot, active: active, matches: matches, theme: theme)
             }
             .task(id: parse) {
                 guard snapshot == nil else { return }
@@ -202,6 +200,8 @@ struct CSVTableView: View {
                 }
             }
             .task(id: query) {
+                guard !Task.isCancelled else { return }
+                if search?.0 != query { search = nil }
                 guard let query, let active, let snapshot else { return }
                 do {
                     let found = try await active.find(
@@ -213,10 +213,7 @@ struct CSVTableView: View {
                     search = (query, found)
                 } catch {}
             }
-            .onChange(of: controls.findFocus) {
-                filterTarget = nil
-                focus(.find)
-            }
+            .onChange(of: controls.findFocus) { filterTarget = nil }
             .onChange(of: display) {
                 if filterTarget?.request != display { filterTarget = nil }
                 pinnedSelection = nil
@@ -289,13 +286,13 @@ struct CSVTableView: View {
 
     @ViewBuilder
     private func overlay(display: DisplayRequest, snapshot: FileTab.DelimitedSnapshot?,
-                         active: DelimitedTablePresentation?, matches: [DelimitedTablePresentation.Cell],
+                         active: DelimitedTablePresentation?, matches: [DelimitedTablePresentation.Cell]?,
                          theme: GhosttyThemeDefinition) -> some View {
         if let target = filterTarget, target.request == display {
             HStack {
                 TextField(String(localized: "Filter Column", table: "Editor"), text: $filterDraft)
                     .accessibilityIdentifier("bailey.csv.filter")
-                    .focused($focusedInput, equals: .filter)
+                    .focused($filterFocused)
                     .onSubmit { applyFilter() }
                 Button(String(localized: "Apply Filter", table: "Editor")) { applyFilter() }
                 Button { filterTarget = nil } label: { Image(systemName: "xmark") }
@@ -304,34 +301,36 @@ struct CSVTableView: View {
             .onKeyPress(.escape) { filterTarget = nil; return .handled }
             .padding(6).frame(maxWidth: 350)
             .modifier(DelimitedOverlayStyle(theme: theme))
-            .onAppear { focus(.filter) }
+            .onAppear(perform: focusFilter)
         } else if controls.showsFind {
             @Bindable var controls = controls
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    TextField(String(localized: "Find", table: "Terminal"), text: $controls.query)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityIdentifier("bailey.csv.find")
-                        .focused($focusedInput, equals: .find)
-                        .onSubmit { controls.perform(.next) }
-                    Text(verbatim: "\(matches.count)").monospacedDigit().foregroundStyle(.secondary)
-                        .accessibilityIdentifier("bailey.csv.match-count")
-                    Button { controls.perform(.previous) } label: { Image(systemName: "chevron.up") }
-                    .accessibilityLabel(Text("Previous match", tableName: "Terminal"))
-                    Button { controls.perform(.next) } label: { Image(systemName: "chevron.down") }
-                    .accessibilityLabel(Text("Next match", tableName: "Terminal"))
-                    Button { controls.perform(.hide) } label: { Image(systemName: "xmark") }
-                    .accessibilityLabel(Text("Close"))
-                }
-                .buttonStyle(.borderless)
-                if controls.showsReplace, let snapshot, let active {
-                    replacementControls(snapshot: snapshot, active: active, matches: matches)
-                }
+            let canReplace = snapshot.map { file.canEditDelimited($0) } == true || (controls.showsReplace && file.hasPendingDelimitedEdit)
+            let count = matches.map { found in
+                found.isEmpty ? String(localized: "No matches", table: "Interface")
+                    : String(localized: "\(controls.matchPosition.map { String($0 + 1) } ?? "?") of \(found.count)", table: "Editor")
             }
-            .padding(6).frame(maxWidth: controls.showsReplace ? 380 : 320)
-            .modifier(DelimitedOverlayStyle(theme: theme))
-            .onKeyPress(.escape) { controls.perform(.hide); return .handled }
-            .onAppear { focus(.find) }
+            FindWidget(query: $controls.query, count: controls.query.isEmpty ? "" : (count ?? ""),
+                       hasMatches: matches?.isEmpty == false, noResults: matches?.isEmpty == true && !controls.query.isEmpty,
+                       canReplace: canReplace, showsReplace: controls.showsReplace,
+                       toggleReplace: { controls.showsReplace.toggle() },
+                       focusRequest: controls.findFocus,
+                       canFocus: { controls.showsFind && filterTarget == nil && canFocus() && controls.grid?.window?.isKeyWindow == true },
+                       onFocused: onFocused,
+                       navigate: controls.navigateFind,
+                       dismiss: controls.dismissFind,
+                       restoreFocus: {
+                           DispatchQueue.main.async {
+                               guard !controls.showsFind, canFocus(), NSApp.isActive,
+                                     let table = controls.grid?.table, let window = table.window,
+                                     window.isKeyWindow else { return }
+                               window.makeFirstResponder(table)
+                           }
+                       }, options: { EmptyView() }, replacement: { fieldWidth, showsActions in
+                if let snapshot, let active {
+                    replacementControls(snapshot: snapshot, active: active, matches: matches ?? [],
+                                        fieldWidth: fieldWidth, showsActions: showsActions)
+                }
+            })
         }
     }
 
@@ -361,14 +360,17 @@ struct CSVTableView: View {
     }
 
     private func replacementControls(snapshot: FileTab.DelimitedSnapshot, active: DelimitedTablePresentation,
-                                     matches: [DelimitedTablePresentation.Cell]) -> some View {
+                                     matches: [DelimitedTablePresentation.Cell], fieldWidth: CGFloat,
+                                     showsActions: Bool) -> some View {
         let request = replaceRequest(active)
         let count = occurrenceCount.flatMap { $0.0 == request ? $0.1 : nil }
         let canWrite = file.canEditDelimited(snapshot) && !file.hasPendingDelimitedEdit && (count ?? 0) > 0
         return VStack(alignment: .leading, spacing: 6) {
-            TextField(String(localized: "Replace With", table: "Editor"), text: $replacement)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityIdentifier("bailey.csv.replacement")
+            FindReplacementRow(replacement: $replacement, canReplace: canWrite && !matches.isEmpty,
+                               canReplaceAll: canWrite,
+                               replace: { replace(snapshot: snapshot, active: active, matches: matches, all: false) },
+                               replaceAll: { replace(snapshot: snapshot, active: active, matches: matches, all: true) },
+                               dismiss: controls.dismissFind, fieldWidth: fieldWidth, showsActions: showsActions)
             Picker(String(localized: "Replace In", table: "Editor"), selection: Binding(get: { replaceScope }, set: { next in
                 replaceScope = next
                 if next == .selection { pinGridSelection(active) }
@@ -382,19 +384,9 @@ struct CSVTableView: View {
             if snapshot.index.columnCount > DelimitedTableIndex.maximumColumns {
                 Text("Only displayed columns are included.", tableName: "Editor").font(.caption)
             }
-            HStack {
-                Text("Matches: \(count ?? 0)", tableName: "Editor")
-                    .font(.caption)
-                    .accessibilityIdentifier("bailey.csv.replace-match-count")
-                Spacer(minLength: 0)
-                Button(String(localized: "Replace", table: "Editor")) {
-                    replace(snapshot: snapshot, active: active, matches: matches, all: false)
-                }.disabled(!canWrite || matches.isEmpty)
-                Button(String(localized: "Replace All", table: "Editor")) {
-                    replace(snapshot: snapshot, active: active, matches: matches, all: true)
-                }.disabled(!canWrite)
-            }
-            .controlSize(.small)
+            Text("Matches: \(count ?? 0)", tableName: "Editor")
+                .font(.caption)
+                .accessibilityIdentifier("bailey.csv.replace-match-count")
         }
         .task(id: request) {
             guard let request else { return }
@@ -444,11 +436,10 @@ struct CSVTableView: View {
         filterTarget = nil
     }
 
-    private func focus(_ input: Input) {
+    private func focusFilter() {
         DispatchQueue.main.async {
-            guard canFocus(),
-                  input == .filter ? filterTarget != nil : controls.showsFind && filterTarget == nil else { return }
-            focusedInput = input
+            guard canFocus(), filterTarget != nil else { return }
+            filterFocused = true
         }
     }
 }
@@ -486,7 +477,7 @@ private struct NativeDelimitedGrid: NSViewRepresentable {
         grid.onFilter = onFilter
         if let snapshot, let presentation, !snapshot.index.records.isEmpty {
             grid.install(snapshot, presentation: presentation)
-            if let matches { grid.showMatch(matches, step: findStep) }
+            grid.showMatch(matches ?? [], step: findStep)
         } else if let snapshot, snapshot.index.records.isEmpty {
             grid.clearProjection()
         }
@@ -593,6 +584,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         table.onSelectionChanged = { [weak self] in
             guard let self else { return }
             gutter.needsDisplay = true
+            updateFindPosition()
         }
         scrollView.documentView = table
         addSubview(scrollView)
@@ -888,8 +880,20 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         )
     }
 
-    func selectedFieldValue() -> String? {
-        guard projectionIsCurrent, let cell = table.selection.caret else { return nil }
+    func selectedFieldValue(requireFocus: Bool = false) -> String? {
+        guard projectionIsCurrent else { return nil }
+        if let editor = activeEditor, window?.firstResponder === editor {
+            let range = editor.selectedRange()
+            guard !editor.hasMarkedText(), range.location != NSNotFound,
+                  range.length > 0, range.length < 524_288,
+                  let storage = editor.textStorage, NSMaxRange(range) <= storage.length else { return nil }
+            return storage.attributedSubstring(from: range).string
+        }
+        guard !requireFocus || window?.firstResponder === table else { return nil }
+        let selection = table.selection
+        guard !table.selectionIsFindMatch, let cell = selection.caret,
+              selection.blocks.count == 1, selection.blocks[0].rows.count == 1,
+              selection.blocks[0].columns.count == 1 else { return nil }
         return value(cell)
     }
 
@@ -901,23 +905,41 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         let delta = step &- previousStep
         previousMatches = matches
         previousStep = step
-        guard !matches.isEmpty, delta != 0 || (changed && controls?.showsFind == true) else { return }
-
-        let caret = table.selection.caret
-        let start: Int
-        if delta < 0 {
-            start = caret.flatMap { cell in
-                matches.lastIndex { ($0.row, $0.column) < (cell.row, cell.column) }
-            } ?? matches.count - 1
-        } else {
-            start = caret.flatMap { cell in
-                matches.firstIndex {
-                    ($0.row, $0.column) > (cell.row, cell.column) || (delta == 0 && $0 == cell)
-                }
-            } ?? 0
+        guard !matches.isEmpty, delta != 0 || (changed && controls?.showsFind == true) else {
+            if changed { updateFindPosition() }
+            return
         }
-        let offset = delta == 0 ? 0 : (delta - (delta > 0 ? 1 : -1)) % matches.count
-        table.select(matches[(start + offset + matches.count) % matches.count], reveal: true)
+
+        let count = matches.count
+        let start: Int
+        if let caret = table.selection.caret {
+            let index = DelimitedTablePresentation.matchIndex(atOrAfter: caret, in: matches)
+            if delta < 0 { start = (index + count - 1) % count }
+            else if delta > 0, index < count, matches[index] == caret { start = (index + 1) % count }
+            else { start = index % count }
+        } else {
+            start = delta < 0 ? count - 1 : 0
+        }
+        let offset = delta == 0 ? 0 : (delta - (delta > 0 ? 1 : -1)) % count
+        table.select(matches[(start + offset + count) % count], reveal: true, findMatch: true)
+    }
+
+    private func updateFindPosition() {
+        guard let controls, controls.showsFind else { return }
+        let query = controls.query
+        let caret = table.selection.caret
+        let projection = presentation?.id
+        // Selection changes may occur during a SwiftUI representable update.
+        // Publish only after validating the actual current projection and caret.
+        DispatchQueue.main.async { [weak self, weak controls] in
+            guard let self, let controls, controls.showsFind, controls.query == query,
+                  self.presentation?.id == projection, self.table.selection.caret == caret else { return }
+            let position = caret.flatMap { cell -> Int? in
+                let index = DelimitedTablePresentation.matchIndex(atOrAfter: cell, in: self.previousMatches)
+                return self.previousMatches.indices.contains(index) && self.previousMatches[index] == cell ? index : nil
+            }
+            if controls.matchPosition != position { controls.matchPosition = position }
+        }
     }
 
     private func physicalCell(_ cell: DelimitedTablePresentation.Cell) -> DelimitedTablePresentation.Cell? {
@@ -1301,7 +1323,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     func trackColumnReorder(from column: Int, _ track: (() -> Bool) -> Int?) -> Bool {
         guard canReorderColumns, let projectionID,
               table.tableColumns.indices.contains(column) else { return false }
-        let isCurrent = { self.acceptsProjection(projectionID) && self.canReorderColumns }
+        let isCurrent = { self.projectionID == projectionID && self.canReorderColumns }
         guard let destination = track(isCurrent), destination != column,
               isCurrent(), table.tableColumns.indices.contains(destination) else { return true }
         table.window?.makeFirstResponder(table)
@@ -1315,7 +1337,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
 
     private func accepts(_ sender: NSMenuItem) -> Bool {
         guard let id = sender.representedObject as? UUID else { return false }
-        return projectionIsCurrent && presentation?.id == id
+        return acceptsProjection(id)
     }
 
     @objc private func filter(_ sender: NSMenuItem) {
@@ -1902,6 +1924,7 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
     }
 
     private(set) var selection = DelimitedTablePresentation.Selection()
+    private(set) var selectionIsFindMatch = false
     var onFocused: () -> Void = {}
     var acceptsGridActions: () -> Bool = { false }
     var onSelectionChanged: () -> Void = {}
@@ -2046,6 +2069,7 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
 
     override func selectAll(_ sender: Any?) {
         guard acceptsGridActions(), numberOfRows > 0, numberOfColumns > 0 else { return }
+        selectionIsFindMatch = false
         selection.select(selection.caret ?? Cell(row: 0, column: 0), rows: 0..<numberOfRows, columns: 0..<numberOfColumns)
         syncSelection()
     }
@@ -2062,8 +2086,10 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
         return .init(row: index / numberOfColumns, column: index % numberOfColumns)
     }
 
-    func select(_ cell: Cell, extending: Bool = false, adding: Bool = false, reveal: Bool = false) {
+    func select(_ cell: Cell, extending: Bool = false, adding: Bool = false, reveal: Bool = false,
+                findMatch: Bool = false) {
         guard (0..<numberOfRows).contains(cell.row), (0..<numberOfColumns).contains(cell.column) else { return }
+        selectionIsFindMatch = findMatch
         selection.select(cell, extending: extending, adding: adding)
         if reveal { scrollToVisible(frameOfCell(atColumn: cell.column, row: cell.row)) }
         syncSelection()
@@ -2071,6 +2097,7 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
 
     func selectRecord(_ row: Int, modifiers: NSEvent.ModifierFlags) {
         guard (0..<numberOfRows).contains(row), numberOfColumns > 0 else { return }
+        selectionIsFindMatch = false
         selection.select(Cell(row: row, column: selection.caret?.column ?? 0),
                          extending: modifiers.contains(.shift), adding: modifiers.contains(.command),
                          columns: 0..<numberOfColumns)
@@ -2079,6 +2106,7 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
 
     func selectColumn(_ column: Int, modifiers: NSEvent.ModifierFlags) {
         guard numberOfRows > 0, (0..<numberOfColumns).contains(column) else { return }
+        selectionIsFindMatch = false
         selection.select(Cell(row: selection.caret?.row ?? 0, column: column),
                          extending: modifiers.contains(.shift), adding: modifiers.contains(.command),
                          rows: 0..<numberOfRows)
@@ -2111,6 +2139,7 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
 
     func clearSelection() {
         selection = .init()
+        selectionIsFindMatch = false
         hoveredCell = nil
         syncSelection()
     }

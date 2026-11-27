@@ -471,26 +471,6 @@ final class WorkspaceGitUITests: XCTestCase {
     }
 
     func testFoldedWorktreeFindNextReplacesHiddenMatchWithoutChangingOtherLines() throws {
-        let findBoard = NSPasteboard(name: .find)
-        let originalFindItems = try (findBoard.pasteboardItems ?? []).map { item -> NSPasteboardItem in
-            let copy = NSPasteboardItem()
-            for type in item.types {
-                guard let data = item.data(forType: type), copy.setData(data, forType: type) else {
-                    throw NSError(domain: "BaileyUITestFind", code: 1, userInfo: [
-                        NSLocalizedDescriptionKey: "Cannot preserve Find pasteboard contents"
-                    ])
-                }
-            }
-            return copy
-        }
-        let originalFindVersion = findBoard.changeCount
-        addTeardownBlock { @MainActor in
-            guard findBoard.changeCount != originalFindVersion else { return }
-            findBoard.clearContents()
-            if !originalFindItems.isEmpty {
-                XCTAssertTrue(findBoard.writeObjects(originalFindItems))
-            }
-        }
         let fixture = try WorkspaceUITestFixture(in: self)
         var lines = (0..<320).map { "line \($0)\n" }
         lines[20] = "line 20 UNIQUE_HIDDEN_FINDER\n"
@@ -521,35 +501,26 @@ final class WorkspaceGitUITests: XCTestCase {
         )
         XCTAssertTrue(folded.firstMatch.waitForExistence(timeout: 15))
         editor.click()
-        let before = window.textFields.count + window.searchFields.count
         app.typeKey("f", modifierFlags: .command)
-        let opened = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            window.textFields.count + window.searchFields.count > before
-        }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 10), .completed)
-        let find = window.searchFields.firstMatch.exists
-            ? window.searchFields.firstMatch
-            : window.textFields.element(boundBy: window.textFields.count - 1)
-        XCTAssertTrue(find.exists)
+        let find = window.textFields["bailey.find.query"]
+        XCTAssertTrue(find.waitForExistence(timeout: 10))
         find.click()
         find.typeKey("a", modifierFlags: .command)
         find.typeText("UNIQUE_HIDDEN_FINDER")
         XCTAssertEqual(find.value as? String, "UNIQUE_HIDDEN_FINDER",
                        "Native Find can inherit the user's prior search; the fixture must replace it")
-        app.typeKey("g", modifierFlags: .command)
-        app.typeKey("g", modifierFlags: .command)
-        app.typeKey("f", modifierFlags: [.command, .option])
-        let replace = window.textFields.matching(
-            NSPredicate(format: "placeholderValue == %@", "Replace")
-        ).firstMatch
+        let next = window.buttons["bailey.find.next"]
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: next)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed)
+        next.click()
+        window.buttons["bailey.find.replace-toggle"].click()
+        let replace = window.textFields["bailey.find.replacement"]
         XCTAssertTrue(replace.waitForExistence(timeout: 10),
                       "Native Replace must be available without leaving the folded editor")
         replace.click()
         replace.typeKey("a", modifierFlags: .command)
         replace.typeText("FOUND20")
-        let replaceAll = window.buttons.matching(
-            NSPredicate(format: "label == %@", "All")
-        ).firstMatch
+        let replaceAll = window.buttons["bailey.find.replace-all"]
         XCTAssertTrue(replaceAll.waitForExistence(timeout: 10))
         replaceAll.click()
         let expected = changed.replacingOccurrences(of: "UNIQUE_HIDDEN_FINDER", with: "FOUND20")

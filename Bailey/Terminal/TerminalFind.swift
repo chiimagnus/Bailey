@@ -19,7 +19,7 @@ final class TerminalFind {
     /// searches as you type.
     var query = "" {
         didSet {
-            guard query != oldValue, !isApplyingReportedNeedle else { return }
+            guard query != oldValue else { return }
             runSearch()
         }
     }
@@ -31,16 +31,11 @@ final class TerminalFind {
     private(set) var selected: Int?
 
     /// Bumped whenever the bar should take (or retake) keyboard focus, so ⌘F
-    /// on an already-open bar re-selects the term the way the system find bar
-    /// does. A counter rather than a flag: repeated requests must each land.
+    /// on an already-open bar focuses the query again. A counter rather than
+    /// a flag: repeated requests must each land.
     private(set) var focusRequest = 0
 
     @ObservationIgnored private let surface: BaileyTerminalView
-
-    /// Set while a needle the backend resolved for us (⌘E's selection) is
-    /// being written into `query`, so echoing it back as a fresh search —
-    /// which would restart the one already running — is suppressed.
-    @ObservationIgnored private var isApplyingReportedNeedle = false
 
     /// Bumped per search so a deferred reveal belonging to an older needle can
     /// tell it has been superseded. A backend reports each restart as a burst
@@ -53,29 +48,19 @@ final class TerminalFind {
         self.surface = surface
     }
 
-    // MARK: - Find menu
-
-    func perform(_ action: FindAction) {
-        switch action {
-        case .show: present()
-        case .hide: dismiss()
-        case .next: navigate(forward: true)
-        case .previous: navigate(forward: false)
-        case .useSelection: searchSelection()
-        // Terminal output is read-only, so Find and Replace stays disabled
-        // while a terminal is focused and never arrives here.
-        case .replace: break
-        }
-    }
-
-    // MARK: - Commands
-
-    /// Shows the bar and focuses its field. The needle survives a close, so
-    /// reopening offers the previous term again, pre-selected.
+    /// Seed from the focused terminal selection, otherwise retain the query.
     func present() {
+        let wasPresented = isPresented
+        // The selection action synchronously reports start_search. Let that
+        // callback open a closed bar and execute its resolved query.
+        if (!wasPresented || surface.window?.firstResponder === surface),
+           surface.searchSelection() {
+            if wasPresented { focusRequest += 1 }
+            return
+        }
         isPresented = true
         focusRequest += 1
-        runSearch()
+        if !wasPresented { runSearch() }
     }
 
     /// Closes the bar, clears the backend's highlights, and hands typing back
@@ -109,27 +94,14 @@ final class TerminalFind {
     }
 
     func navigate(forward: Bool) {
-        guard !query.isEmpty else { return }
-        // ⌘G with the bar closed resumes the last search rather than doing
-        // nothing, matching how Find Next behaves elsewhere on macOS.
-        guard isPresented else {
-            present()
-            return
-        }
+        guard isPresented, !query.isEmpty else { return }
         surface.navigateSearch(forward: forward)
-    }
-
-    /// ⌘E. The backend resolves the needle from the grid selection and reports
-    /// it back through ``started(needle:)``, so the selection never has to be
-    /// read out and re-escaped here.
-    func searchSelection() {
-        guard surface.hasSelection else { return }
-        surface.searchSelection()
     }
 
     // MARK: - Reports from the backend
 
     func started(needle: String) {
+        let wasPresented = isPresented
         // Only claim keyboard focus when this actually opens the bar. A
         // backend may report a start for a search already under way, and
         // re-selecting the field mid-edit would eat what the user is typing.
@@ -137,10 +109,10 @@ final class TerminalFind {
             isPresented = true
             focusRequest += 1
         }
-        guard !needle.isEmpty, needle != query else { return }
-        isApplyingReportedNeedle = true
-        query = needle
-        isApplyingReportedNeedle = false
+        // start_search reports the requested needle, but does not execute
+        // the search. Updating the query must send it back to Ghostty.
+        if !needle.isEmpty, needle != query { query = needle }
+        else if !wasPresented { runSearch() }
     }
 
     /// The backend ended the search on its own. Mirror it without sending

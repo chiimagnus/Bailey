@@ -31,6 +31,23 @@ final class DelimitedTablePresentationTests: XCTestCase {
         }
     }
 
+    func testMatchIndexFindsInsertionPointInDisplayOrder() async throws {
+        let source = "A,B,C\nneedle,x,needle\nx,x,needle\nneedle,x,x"
+        let index = try await DelimitedTableIndex.parse(source, preferred: .comma, selected: .comma)
+        let display = try await DelimitedTablePresentation.evaluate(source: source, index: index, configuration: .init())
+        let matches = try await display.find("needle", source: source, index: index, columnCount: 3)
+        XCTAssertEqual(matches, [.init(row: 0, column: 0), .init(row: 0, column: 2),
+                                 .init(row: 1, column: 2), .init(row: 2, column: 0)])
+        for row in 0...3 {
+            for column in 0...3 {
+                let caret = DelimitedTablePresentation.Cell(row: row, column: column)
+                let expected = matches.firstIndex { ($0.row, $0.column) >= (row, column) } ?? matches.count
+                XCTAssertEqual(DelimitedTablePresentation.matchIndex(atOrAfter: caret, in: matches), expected)
+                XCTAssertEqual(DelimitedTablePresentation.matchIndex(atOrAfter: caret, in: []), 0)
+            }
+        }
+    }
+
     func testEmptyFindQueryDoesNotMatchEmptyFieldsAcrossDelimiters() async throws {
         for separator in DelimitedTableIndex.Separator.allCases {
             let delimiter = String(UnicodeScalar(separator.rawValue)!)

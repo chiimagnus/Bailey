@@ -30,7 +30,7 @@
 | [dock.md](features/dock.md) | 自由停靠、展示与活动组、交接和窗口生命周期 | 展示／激活语义、布局、移动、关闭或窗口动作路由改变 |
 | [terminal.md](features/terminal.md) | Shell、终端表面、输入、查找与通知 | 终端生命周期或输入输出改变 |
 | [files.md](features/files.md) | 共享文件树、展开／选择与焦点、刷新及文件操作 | 树行状态／键盘导航、刷新或文件操作改变 |
-| [editor.md](features/editor.md) | 文件缓冲、自动保存、重载和文本编辑 | 读取、编辑、保存或高亮改变 |
+| [editor.md](features/editor.md) | 文件预览、[CSV／TSV 表格](features/editor.md#csvtsv-表格)、[查找与替换](features/editor.md#查找与替换)、文本缓冲和保存 | 预览、读取、编辑、查找、保存或高亮改变 |
 | [git.md](features/git.md) | Git Changes／Graph 局部状态、图谱、工作树、操作与安全边界 | Git 行状态／焦点、图谱、工作树、刷新或执行行为改变 |
 | [diff.md](features/diff.md) | 差异读取、原生渲染、编辑与重挂载 | Diff 数据、布局或保存改变 |
 | [browser.md](features/browser.md) | 浏览器标签、导航和开发服务入口 | WebView、地址处理或导航改变 |

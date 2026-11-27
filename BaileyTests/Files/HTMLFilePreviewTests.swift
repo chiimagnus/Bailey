@@ -314,7 +314,8 @@ final class HTMLFilePreviewTests: XCTestCase {
             <!doctype html><div style="height:1000px"></div>
             <p id="first">真实查找 &amp; WebKit 🧪</p><div style="height:1000px"></div>
             <p id="second">真实查找 &amp; WebKit 🧪</p>
-            <span data-source-only="not-rendered-attribute">Visible text</span>
+            <span id="visible-first" data-source-only="not-rendered-attribute">Visible text</span>
+            <p id="visible-second">Visible text</p>
             """
         try Data(source.utf8).write(to: path)
         let application = WorkspaceApplication()
@@ -327,7 +328,6 @@ final class HTMLFilePreviewTests: XCTestCase {
         guard case .file(let file) = tab.content else { return XCTFail("Expected HTML file") }
         try await file.waitForText()
         XCTAssertTrue(manager.canFind)
-        XCTAssertTrue(manager.canReplace)
         project.setFilePreviewMode(.preview, for: tab)
         let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 500, height: 320),
                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)
@@ -348,8 +348,7 @@ final class HTMLFilePreviewTests: XCTestCase {
         XCTAssertFalse(preview.failed)
         XCTAssertFalse(webView.isEditable)
         XCTAssertTrue(manager.canFind)
-        XCTAssertFalse(manager.canReplace)
-        manager.performFindAction(.show)
+        manager.showFind()
         XCTAssertTrue(preview.showsFind)
         func findField(in view: NSView) -> NSTextField? {
             if let field = view as? NSTextField, field.isEditable, !field.isHiddenOrHasHiddenAncestor { return field }
@@ -379,9 +378,9 @@ final class HTMLFilePreviewTests: XCTestCase {
         try await waitUntil { await selectedElement() == "first" && preview.findMatchFound == true }
         let firstY = try await webView.evaluateJavaScript("window.scrollY", contentWorld: .defaultClient) as? Double
         XCTAssertGreaterThan(try XCTUnwrap(firstY), 0)
-        manager.performFindAction(.next)
+        preview.navigateFind(forward: true)
         try await waitUntil { await selectedElement() == "second" }
-        manager.performFindAction(.previous)
+        preview.navigateFind(forward: false)
         try await waitUntil { await selectedElement() == "first" }
         preview.findQuery = "not-rendered-attribute"
         try await waitUntil { preview.findMatchFound == false }
@@ -393,14 +392,51 @@ final class HTMLFilePreviewTests: XCTestCase {
             contentWorld: .defaultClient
         )
         preview.findQuery = ""
-        manager.performFindAction(.useSelection)
+        preview.dismissFind()
+        manager.showFind()
         try await waitUntil { preview.findQuery == needle && preview.findMatchFound == true }
-        manager.performFindAction(.useSelection)
-        try await waitUntil { preview.findQuery == needle && preview.findMatchFound == true }
-        manager.performFindAction(.replace)
+        XCTAssertTrue(window.makeFirstResponder(webView))
+        _ = try await webView.evaluateJavaScript(
+            "window.getSelection().selectAllChildren(document.querySelector('span'))",
+            contentWorld: .defaultClient
+        )
+        manager.showFind()
+        try await waitUntil { preview.findQuery == "Visible text" && preview.findMatchFound == true }
+        preview.findQuery = "VISIBLE TEXT"
+        try await waitUntil { preview.findMatchFound == true }
+        XCTAssertTrue(window.makeFirstResponder(webView))
+        let previousMatch = await selectedElement()
+        manager.showFind()
+        // Wait for a different native match and its recorded selection, not the previous result's Bool.
+        preview.navigateFind(forward: true)
+        try await waitUntil {
+            guard await selectedElement() != previousMatch else { return false }
+            return (try? await webView.evaluateJavaScript("""
+                (() => {
+                    const range = window.getSelection()?.getRangeAt(0);
+                    const match = window.baileyFindMatchRange;
+                    return !!range && !!match && range.startContainer === match.startContainer &&
+                        range.startOffset === match.startOffset && range.endContainer === match.endContainer &&
+                        range.endOffset === match.endOffset;
+                })()
+                """, contentWorld: .defaultClient) as? Bool) == true
+        }
+        _ = try await webView.evaluateJavaScript("""
+            (() => {
+                const range = document.createRange();
+                const node = document.querySelector('span').firstChild;
+                range.setStart(node, 0);
+                range.setEnd(node, 7);
+                window.getSelection().removeAllRanges();
+                window.getSelection().addRange(range);
+            })()
+            """, contentWorld: .defaultClient)
+        XCTAssertEqual(preview.findQuery, "VISIBLE TEXT", "An automatic WebKit result must not overwrite the query")
+        manager.showFind()
+        try await waitUntil { preview.findQuery == "Visible" && preview.findMatchFound == true }
         XCTAssertFalse(webView.isEditable)
         XCTAssertFalse(file.isDirty)
-        manager.performFindAction(.hide)
+        preview.dismissFind()
         try await waitUntil {
             host.layoutSubtreeIfNeeded()
             return !preview.showsFind && findField(in: host) == nil
@@ -417,15 +453,12 @@ final class HTMLFilePreviewTests: XCTestCase {
         }
         project.selectPanel(.tab(tab.id))
         XCTAssertTrue(manager.canFind)
-        XCTAssertTrue(manager.canReplace)
-        let sourceScroll = try XCTUnwrap(file.textView?.enclosingScrollView)
-        manager.performFindAction(.show)
-        try await waitUntil { sourceScroll.isFindBarVisible }
+        manager.showFind()
+        try await waitUntil { file.textFind.isPresented }
         XCTAssertFalse(preview.showsFind, "Source Find cannot open the companion's search bar")
         project.selectPanel(.filePreview(tab.id))
         XCTAssertTrue(manager.canFind)
-        XCTAssertFalse(manager.canReplace)
-        manager.performFindAction(.show)
+        manager.showFind()
         XCTAssertTrue(preview.showsFind)
         XCTAssertTrue(file.htmlPreview?.webView === webView)
         XCTAssertEqual(try Data(contentsOf: path), Data(source.utf8))
@@ -446,17 +479,17 @@ final class HTMLFilePreviewTests: XCTestCase {
         otherProject.setFilePreviewMode(.preview, for: otherTab)
         _ = try await display(otherFile, in: otherRoot)
         let otherPreview = try XCTUnwrap(otherFile.htmlPreview)
-        otherManager.performFindAction(.show)
+        otherManager.showFind()
         otherPreview.findQuery = "Independent window"
         try await waitUntil { otherPreview.findMatchFound == true }
-        XCTAssertEqual(preview.findQuery, needle)
-        manager.performFindAction(.hide)
+        XCTAssertEqual(preview.findQuery, "Visible")
+        preview.dismissFind()
         XCTAssertTrue(otherPreview.showsFind)
         XCTAssertEqual(otherPreview.findQuery, "Independent window")
         XCTAssertEqual(try Data(contentsOf: otherPath), Data(otherSource.utf8))
         project.close(tab)
         XCTAssertNil(file.htmlPreview)
-        preview.performFindAction(.show)
+        preview.presentFind()
         XCTAssertFalse(preview.showsFind, "Retired previews cannot resume searching")
     }
 
