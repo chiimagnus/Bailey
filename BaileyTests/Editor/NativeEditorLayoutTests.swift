@@ -291,7 +291,8 @@ final class NativeEditorLayoutTests: XCTestCase {
                 && color.redComponent - color.blueComponent > 0.25
         }
         XCTAssertTrue(found, "The selected line must retain its gutter background highlight")
-        XCTAssertEqual(gutter.preferredWidth, 35, accuracy: 1)
+        let digitWidth = ("8" as NSString).size(withAttributes: [.font: editor.gutterNumberFont]).width
+        XCTAssertEqual(gutter.preferredWidth, ceil(digitWidth + 12), accuracy: 1)
         editor.text = String(repeating: "x\n", count: 100_000)
         XCTAssertGreaterThan(gutter.preferredWidth, 35,
                              "Six-digit line numbers must not be clipped by a fixed gutter width")
@@ -468,7 +469,7 @@ final class NativeEditorLayoutTests: XCTestCase {
         editor.showsLineNumbers = true
         let gutter = try XCTUnwrap(editor.gutterView)
         let digitWidth = ("8" as NSString).size(withAttributes: [.font: font]).width
-        let expected = max(35, ceil(digitWidth * 5 + 10))
+        let expected = ceil(digitWidth * 5 + 12)
         XCTAssertEqual(gutter.preferredWidth, expected, accuracy: 1,
                        "Line numbers must use the editor font, not smaller system mono")
     }
@@ -487,7 +488,7 @@ final class NativeEditorLayoutTests: XCTestCase {
                 editor.configureWrapping(wraps, viewportWidth: 340)
                 window.contentView?.layoutSubtreeIfNeeded()
                 scroll.layoutSubtreeIfNeeded()
-                let expectedWidth = max(35, ceil(CGFloat(String(rowCount).count) * digitWidth + 10))
+                let expectedWidth = ceil(CGFloat(String(rowCount).count) * digitWidth + 12)
                 XCTAssertEqual(gutter.preferredWidth, expectedWidth, accuracy: 1,
                     "Gutter width must follow live row count: \(rowCount)")
                 XCTAssertEqual(editor.textContainerInset.width, 0, accuracy: 0.5)

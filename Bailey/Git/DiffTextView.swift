@@ -1,6 +1,6 @@
 //  Native NSTextView rendering for the diff viewer: one "code pane" is a text
 //  view inside a scroll view, a full-width decoration underlay behind it
-//  (row tints, word-level emphasis, deletion markers), and a native gutter
+//  (word-level emphasis, filler rows, deleted text), and a native gutter
 //  with per-file line numbers to its left.
 //
 //  The text view is transparent and the scroll view draws no background; the
@@ -36,8 +36,8 @@ enum DiffTypography {
 /// the current appearance so theme and appearance switches repaint correctly.
 struct DiffColorScheme {
     let background: NSColor
-    let addedRow: NSColor
-    let removedRow: NSColor
+    let addedGutterBackground: NSColor
+    let removedGutterBackground: NSColor
     let addedEmphasis: NSColor
     let removedEmphasis: NSColor
     let fillerRow: NSColor
@@ -46,7 +46,6 @@ struct DiffColorScheme {
     let gutterText: NSColor
     let addedGutterText: NSColor
     let removedGutterText: NSColor
-    let deletionMarker: NSColor
     let annotationText: NSColor
 
     static func current(dark: Bool) -> DiffColorScheme {
@@ -68,8 +67,8 @@ struct DiffColorScheme {
 
         return DiffColorScheme(
             background: background,
-            addedRow: over(green, 0.16),
-            removedRow: over(red, 0.16),
+            addedGutterBackground: over(green, 0.16),
+            removedGutterBackground: over(red, 0.16),
             addedEmphasis: over(green, 0.38),
             removedEmphasis: over(red, 0.38),
             fillerRow: over(foreground, 0.03),
@@ -78,7 +77,6 @@ struct DiffColorScheme {
             gutterText: theme.surfaceNSColor(elevation: 0.35),
             addedGutterText: over(green, 0.75),
             removedGutterText: over(red, 0.75),
-            deletionMarker: red,
             annotationText: theme.surfaceNSColor(elevation: 0.5)
         )
     }
@@ -837,7 +835,7 @@ private enum DiffGhostGeometry {
 // MARK: - Decoration underlay
 
 /// Viewport-sized view behind the scroll view. Paints the pane background,
-/// per-row diff tints, word-level emphasis, edit-mode deletion markers, and
+/// word-level emphasis, filler rows, edit-mode deleted text, and
 /// the "no newline at end of file" glyph.
 final class DiffDecorationUnderlayView: NSView {
     weak var textView: DiffTextView?
@@ -893,23 +891,10 @@ final class DiffDecorationUnderlayView: NSView {
             // straddling the row's top edge isn't clipped away.
             guard rowRect.insetBy(dx: 0, dy: -2).intersects(dirtyRect) else { continue }
 
-            switch metadata.kind {
-            case .context:
-                break
-            case .added:
-                scheme.addedRow.setFill()
-                rowRect.fill()
-            case .removed:
-                scheme.removedRow.setFill()
-                rowRect.fill()
-            case .filler:
+            if metadata.kind == .filler {
                 scheme.fillerRow.setFill()
                 rowRect.fill()
                 drawFillerStripes(in: rowRect, color: scheme.fillerStripe)
-            case .collapsed:
-                // The shared foreground overlay owns the folded separator
-                // for both read-only and editable text surfaces.
-                break
             }
 
             if !metadata.emphasis.isEmpty {
@@ -991,10 +976,10 @@ final class DiffDecorationUnderlayView: NSView {
         guard first < end else { return }
         for index in first..<end {
             let y = startY + CGFloat(index) * rowHeight
-            let rect = CGRect(x: 0, y: y, width: bounds.width, height: rowHeight)
-            (block.kind == .filler ? scheme.fillerRow : scheme.removedRow).setFill()
-            rect.fill()
             if block.kind == .filler {
+                let rect = CGRect(x: 0, y: y, width: bounds.width, height: rowHeight)
+                scheme.fillerRow.setFill()
+                rect.fill()
                 drawFillerStripes(in: rect, color: scheme.fillerStripe)
             } else {
                 block.lines[index].draw(at: CGPoint(x: textX, y: y))
@@ -1064,8 +1049,8 @@ enum DiffGutterLayout {
 }
 
 /// Fixed-width gutter to the left of a code pane: line numbers per file side,
-/// a +/− change marker, row tint continuation, and edit-mode deletion
-/// wedges. Sits outside the scroll view and repaints on scroll, so its
+/// a +/− change marker and colored backgrounds for changed lines.
+/// Sits outside the scroll view and repaints on scroll, so its
 /// content never scrolls horizontally with the code.
 final class DiffGutterView: NSView {
     weak var textView: DiffTextView?
@@ -1193,13 +1178,13 @@ final class DiffGutterView: NSView {
             case .context:
                 break
             case .added:
-                scheme.addedRow.setFill()
+                scheme.addedGutterBackground.setFill()
                 rowRect.fill()
                 numberColor = scheme.addedGutterText
                 accentBar = scheme.addedGutterText
                 marker = "+"
             case .removed:
-                scheme.removedRow.setFill()
+                scheme.removedGutterBackground.setFill()
                 rowRect.fill()
                 numberColor = scheme.removedGutterText
                 accentBar = scheme.removedGutterText
@@ -1321,7 +1306,7 @@ final class DiffGutterView: NSView {
         for lineOffset in first..<end {
             let y = startY + CGFloat(lineOffset) * rowHeight
             let rect = CGRect(x: 0, y: y, width: bounds.width, height: rowHeight)
-            (block.kind == .filler ? scheme.fillerRow : scheme.removedRow).setFill()
+            (block.kind == .filler ? scheme.fillerRow : scheme.removedGutterBackground).setFill()
             rect.fill()
             if block.kind == .filler { continue }
             scheme.removedGutterText.setFill()
@@ -1849,8 +1834,8 @@ final class DiffCodePaneView: NSView {
 
         wantsLayer = true
 
-        // Transparent stack: the underlay paints the background (and tints)
-        // behind everything.
+        // Transparent stack: the underlay paints the canvas and word highlights
+        // behind the native text.
         let clipView = DiffClipView()
         clipView.drawsBackground = false
         scrollView.contentView = clipView
@@ -1880,7 +1865,7 @@ final class DiffCodePaneView: NSView {
         }
 
         // Native NSTextView paints an opaque system background by default;
-        // keep diff row tints, word emphasis and deletion ghosts visible below it.
+        // keep word emphasis and deleted text visible below it.
         textView.drawsBackground = false
         textView.isEditable = mode == .edit
         textView.isSelectable = true
