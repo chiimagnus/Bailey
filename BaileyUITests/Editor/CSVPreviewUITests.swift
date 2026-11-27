@@ -409,9 +409,23 @@ final class CSVPreviewUITests: XCTestCase {
         menu("Insert Column Right", at: header("Value"))
         save("Name,Value,,Note\nAlpha,1,,one\nBeta,2,,two\nGamma,3,,three\n")
         undo()
-        menu("Move Column Left", at: header("Value"))
+        let valueHeader = header("Value")
+        let nameHeader = header("Name")
+        XCTAssertTrue(valueHeader.waitForExistence(timeout: 8))
+        XCTAssertTrue(nameHeader.exists)
+        valueHeader.rightClick()
+        XCTAssertTrue(WorkspaceUITestSupport.menuItem("Insert Column Right", in: app).waitForExistence(timeout: 5))
+        for title in ["Move Column Left", "Move Column Right", "Move Column to Position…"] {
+            XCTAssertFalse(WorkspaceUITestSupport.menuItem(title, in: app).exists, title)
+        }
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        valueHeader.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .click(forDuration: 0.15, thenDragTo: nameHeader.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5)))
         save("Value,Name,Note\n1,Alpha,one\n2,Beta,two\n3,Gamma,three\n")
+        XCTAssertLessThan(header("Value").frame.minX, header("Name").frame.minX)
         undo()
+        XCTAssertTrue(header("Value").waitForExistence(timeout: 8))
+        XCTAssertLessThan(header("Name").frame.minX, header("Value").frame.minX)
         header("Note").rightClick()
         let deleteColumn = WorkspaceUITestSupport.menuItem("Delete Column", in: app)
         XCTAssertTrue(deleteColumn.waitForExistence(timeout: 5))
@@ -428,6 +442,102 @@ final class CSVPreviewUITests: XCTestCase {
             save("Name,Value,Note\n,,\n,,\n,,\n")
             undo()
         }
+    }
+
+    func testDragColumnAcrossGridCommitsFinalPositionAndSupportsRedo() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let original = "First,Second,Third,Fourth\nAlpha,Beta,Gamma,Delta\n"
+        let moved = "Second,Third,Fourth,First\nBeta,Gamma,Delta,Alpha\n"
+        let file = try fixture.file("Drag.csv", text: original)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root,
+                                                    clipboardIsReadOnly: true)
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let table = WorkspaceUITestSupport.element("bailey.csv.table", in: app)
+        XCTAssertTrue(table.staticTexts["Alpha"].waitForExistence(timeout: 12))
+        func header(_ title: String) -> XCUIElement {
+            table.buttons.matching(NSPredicate(format: "title == %@", title)).firstMatch
+        }
+        func expect(_ expected: String, first: String, last: String) {
+            app.typeKey("s", modifierFlags: .command)
+            let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                (try? Data(contentsOf: file)) == Data(expected.utf8)
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 10), .completed)
+            let projected = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                header(first).exists && header(last).exists &&
+                    header(first).frame.maxX < header(last).frame.maxX
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [projected], timeout: 8), .completed)
+        }
+        let first = header("First")
+        let last = header("Fourth")
+        XCTAssertTrue(first.exists && last.exists)
+        first.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .click(forDuration: 0.15, thenDragTo: last.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)))
+        expect(moved, first: "Second", last: "First")
+        app.typeKey("z", modifierFlags: .command)
+        expect(original, first: "First", last: "Fourth")
+        app.typeKey("z", modifierFlags: [.command, .shift])
+        expect(moved, first: "Second", last: "First")
+    }
+
+    func testWideColumnDragInNormalWindowPreservesExactBytes() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let columns = 4096, rows = 200
+        func document(order: [Int]) -> String {
+            order.map { "C\($0)" }.joined(separator: ",") + "\r\n"
+                + (0..<rows).map { row in
+                    order.map { "\(1000 + row):\(10000 + $0)" }.joined(separator: ",")
+                }.joined(separator: "\r\n")
+        }
+        let original = document(order: Array(0..<columns))
+        let moved = document(order: [1, 0] + Array(2..<columns))
+        let file = try fixture.file("Wide.csv", text: original)
+        let reference = try fixture.file("Reference.csv", text: document(order: [0, 1]))
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root,
+                                                    clipboardIsReadOnly: true)
+        let window = app.windows.firstMatch
+        let table = WorkspaceUITestSupport.element("bailey.csv.table", in: app)
+        func open(_ url: URL) {
+            let row = WorkspaceUITestSupport.fileRow(url, in: window)
+            XCTAssertTrue(row.waitForExistence(timeout: 15))
+            row.doubleClick()
+            XCTAssertTrue(table.waitForExistence(timeout: 30))
+        }
+        // Calibrate from two identical leading columns to avoid AX enumeration of all 4096 columns.
+        open(reference)
+        let first = table.buttons.matching(NSPredicate(format: "title == %@", "C0")).firstMatch
+        let second = table.buttons.matching(NSPredicate(format: "title == %@", "C1")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10) && second.exists)
+        let initialFrame = table.frame, firstFrame = first.frame, secondFrame = second.frame
+        open(file)
+        let wideFrame = table.frame
+        XCTAssertGreaterThan(wideFrame.height, 180)
+        func coordinate(_ frame: CGRect, fraction: CGFloat) -> XCUICoordinate {
+            let origin = window.frame.origin
+            return window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+                dx: wideFrame.minX + frame.minX - initialFrame.minX + frame.width * fraction - origin.x,
+                dy: wideFrame.minY + frame.midY - initialFrame.minY - origin.y))
+        }
+        coordinate(firstFrame, fraction: 0.5).click(forDuration: 0.15,
+                                                     thenDragTo: coordinate(secondFrame, fraction: 0.85))
+        func save(_ expected: String) {
+            window.typeKey("s", modifierFlags: .command)
+            let bytes = Data(expected.utf8)
+            let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                (try? Data(contentsOf: file)) == bytes
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 30), .completed)
+        }
+        save(moved)
+        window.typeKey("z", modifierFlags: .command)
+        save(original)
+        window.typeKey("z", modifierFlags: [.command, .shift])
+        save(moved)
     }
 
     func testEmptyCSVInsertCreatesHeaderAndEditableDataRow() throws {

@@ -7,7 +7,7 @@ title = "原文 UTF-16 字段索引与有界类型路由"
 status = "completed"
 plan = "plan-p1.md#p1-t1"
 commit = "1c9aefcc8b1ea3dfdb80c686167b64d8226c3a4c"
-note = "编码兼容提交 50fc8b13；184 宿主与真实 Windows Tailscale、正式 Debug 构建及验签通过。索引不是表格界面。最低 macOS 15.6 保留编译部署目标，未实机。 本轮独立逐提交审查通过，实际入口及源索引链复核。"
+note = "编码兼容提交 50fc8b13；184 宿主与真实 Windows Tailscale、正式 Debug 构建及验签通过。索引不是表格界面。最低 macOS 15.6 保留编译部署目标，未实机。 本轮独立逐提交审查通过，实际入口及源索引链复核。 超长逻辑记录跨越 16384 字符预算时延伸完整记录采样，修复合法极宽 CSV 误判只读；逗号、分号、Tab、引号换行与真实歧义均回归。最终 Debug 相关 42/42、Release 72/72。"
 
 [[tasks]]
 id = "P1-T2"
@@ -39,7 +39,7 @@ title = "原型式主题与自适应列宽"
 status = "completed"
 plan = "plan-p3.md#p3-t1"
 commit = "82f0070de58ece8365061ee9f9336530aa116b28"
-note = "宿主 34/34，最终绘制复验 3/3；60 主题、活动组合、2× 截图、十万行、列上限与 100 次挂载。日志 /tmp/bailey-csv-p3-theme.5ziGDvpP、/tmp/bailey-csv-p3-confirm.yqEhngvN、/tmp/bailey-csv-p3-debug-final.XKOUy5Lt。按用户要求不做完整 GUI。 本轮独立审查主题及列宽调用链、挂载宿主通过。"
+note = "宿主 34/34，最终绘制复验 3/3；60 主题、活动组合、2× 截图、十万行、列上限与 100 次挂载。日志 /tmp/bailey-csv-p3-theme.5ziGDvpP、/tmp/bailey-csv-p3-confirm.yqEhngvN、/tmp/bailey-csv-p3-debug-final.XKOUy5Lt。按用户要求不做完整 GUI。 本轮独立审查主题及列宽调用链、挂载宿主通过。 2026-11-27 补齐列方向虚拟化：512 列 200 行首屏从 13824 个数据格／275 MiB 额外物理内存降为 459 个／10.4 MiB；4096 列 200 行在 800×500 pt 视口中仅实现 621 格，额外物理内存 9.5 MiB，32 次双轴定位后增量 1.2 MiB。逐格核对值和选区，十万行缩窗末行定位、真实文件末列编辑／字号调整／原字节 Undo/Redo 均通过。批量更新列宽时暂停旧数据格布局，视口变化后由原生 tile 重算文档尺寸。Debug 宿主 70/70，真实 Windows SSH 2/2，正式 Debug 构建验签通过；AppKit 仍遍历全部列，4096 列跨区定位中位数约 228–272 ms。Release 测试编译在未修改的 PublicationAcknowledgementRunner.swift 遇到 Swift nonisolated 诊断，未执行性能样本；完整 GUI、最低系统与其他硬件本轮未测。日志 /tmp/bailey-csv-viewport.QE04aR/。 后续 34b0fe89 将 Release 产品优化与测试驱动分离。批量列变更只执行一次原生 tile，4096 列 × 200 行 Release 首屏布局 4.871→0.994 s，真实文件打开 5.743→1.158 s，32 次连续横滚／纵滚中位 2.27／27.71 ms，跨区定位中位 258.68 ms（原生行建立仍遍历列）。Debug 70 项均通过（新增边界断言修正后单独通过）；真实 SSH CSV 两项及共用发布机制一项通过；最新 Release 70/70。用户明确排除最低系统与其他硬件复测。日志 /tmp/bailey-csv-final.4Bfsya/。"
 
 [[tasks]]
 id = "P3-T2"
@@ -55,7 +55,7 @@ title = "插入、删除、移动列与直接重命名表头"
 status = "completed"
 plan = "plan-p4.md#p4-t1"
 commit = "b59a23d"
-note = "隔离宿主40/40、原生表头与编码失败保稿、隐藏行与百万字段边界通过；Windows Tailscale真列移动、Undo、重连与冲突2/2；Debug验签。日志 /tmp/bailey-csv-p4-columns-final.eUJdV0MZ、/tmp/bailey-csv-p4-structure-ssh.qW5mPo0L。 本轮本机列操作通过；共享远端 F-12 另行追踪。401e6259 405 组编码/分隔符/列变换真实往返通过。"
+note = "隔离宿主40/40、原生表头与编码失败保稿、隐藏行与百万字段边界通过；Windows Tailscale真列移动、Undo、重连与冲突2/2；Debug验签。日志 /tmp/bailey-csv-p4-columns-final.eUJdV0MZ、/tmp/bailey-csv-p4-structure-ssh.qW5mPo0L。 本轮本机列操作通过；共享远端 F-12 另行追踪。401e6259 405 组编码/分隔符/列变换真实往返通过。 本轮改为原生表头拖拽，删除三项移动菜单与位置对话框；67 项相关宿主与 4 项真实 GUI 通过，含双向跨列、原字节、撤销重做、过期投影及保存保护，Debug 验签通过；未重测真实 SSH 或最低系统。 2026-11-27 M1 Pro/macOS 27.3 Debug 隔离 AppKit 对照共 570 次有效拖拽（7 组前后各 30 次、5 组无预览对照各 30 次）；十万行、128/256/4096 列、末端滚动、长多行字段覆盖。4096 列 200 行在 72 pt 视口中，CPU 中位数 331.86→20.95 ms，耗时 546.44→302.39 ms；取消实时重排，只绘制插入线，松开后单次事务。常规高度 4096 列首次布局约 2.6 GiB RSS 后停止，未开始拖动，属独立的宽表布局瓶颈。68 项相关宿主通过（含事件跟踪、行号栏、保存和重连保护）；4 项真实 GUI 用例通过，其中结构菜单首次失败、单独复测通过；Debug 构建及签名通过。日志 /tmp/bailey-csv-native-bench.hp1emc/。未测 Release 性能、最低系统、其他硬件和真实 SSH。 后续补验：原有 16 条真实 GUI 通过，批量布局后 4 条关键交互复验通过，超长表头修复后新增 4096 列 200 行常规窗口实际拖拽、保存、Undo/Redo 原字节通过；真实 SSH CSV 两条及共用发布机制一条通过。最终 Release 72/72，4096 列跨区中位 260.68 ms，连续横滚/纵滚 2.93/29.11 ms；正式 Debug 构建验签及原子安装完成。最低系统与其他硬件按用户要求不复测。"
 
 [[tasks]]
 id = "P4-T2"
