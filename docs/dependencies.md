@@ -1,12 +1,13 @@
 # 依赖与资源维护
 
 维护第三方依赖、必要本地补丁及生成资源；版本或资源来源改变时更新。
-构建见 [development.md](development.md)，来源和许可证见 [NOTICE](../NOTICE.md)。
+构建见 [development.md](development.md)，来源和许可证见 [第三方来源与许可证](#第三方来源与许可证)。
 
 ## 依赖与本地补丁
 
 依赖声明在 Xcode 工程与本地包清单，解析版本以 [Package.resolved](../Bailey.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved)。
-不要在别处维护第二份完整版本清单；升级时同步检查下面的必要契约和 [NOTICE](../NOTICE.md)。
+不要在别处维护第二份完整版本清单；升级依赖或重新生成资源时同步核对必要契约与许可证索引，
+保留原有许可证、版权和署名，不翻译、覆盖或删减许可证原文。
 
 ### Ghostty
 
@@ -56,7 +57,7 @@ SVG 共用 [本地 SwiftDraw](../Vendor/SwiftDraw/README.md)；版本、许可�
 未生效的可视范围前后配置已删除，实际请求长度由 `requestLengthLimit` 限制。
 未使用的同步查询模式、弃用游标及 noChange 样式叠加路径不保留；根解析仍使用原串行队列和现有同步阈值。
 
-源码与 App 资源中的 BSD 许可证须保持一致，来源归 [NOTICE](../NOTICE.md)。
+源码与 App 资源中的 BSD 许可证须保持一致。
 
 ### 语法解析与 Diff
 
@@ -98,4 +99,27 @@ bun scripts/generate-material-file-icons.ts /path/to/vscode-material-icon-theme
 禁止手改；普通构建不会重新生成或下载图标。
 
 更新资源后检查明暗主题、常见扩展名与未知文件图标，保留生成的许可证和来源声明。
-字体位于 `Bailey/Resources/Fonts/`，更换时保留相应许可；具体声明见 [NOTICE](../NOTICE.md)。
+字体位于 `Bailey/Resources/Fonts/`，更换时保留相应许可。
+
+## 第三方来源与许可证
+
+以下索引列出仓库现有的第三方来源与许可，不替代许可证原文，也不代表完整的依赖许可审计。
+
+| 组件 | 来源与许可证 |
+| --- | --- |
+| STTextView 原生行号索引 | [原许可证与署名](../Bailey/Resources/Licenses/LICENSE-sttextview-source.txt) |
+| Tree-sitter 语法资源 | [来源与固定版本](../Vendor/BaileyGrammars/README.md) · [MIT](../Vendor/BaileyGrammars/LICENSE) |
+| Neon | [来源与本地补丁](../Vendor/Neon/README.md) · [BSD](../Vendor/Neon/LICENSE) · [App 内许可证](../Bailey/Resources/Licenses/LICENSE-neon.txt) |
+| Material Icon Theme | [来源与固定提交](../Bailey/Resources/MaterialFileIcons/NOTICE-material-icon-theme.txt) · [许可证原文](../Bailey/Resources/MaterialFileIcons/LICENSE-material-icon-theme.txt) |
+| JetBrains Mono | [OFL](../Bailey/Resources/Fonts/OFL.txt) |
+| Nerd Fonts | [许可证原文](../Bailey/Resources/Fonts/LICENSE-nerd-fonts.txt) |
+| Ghostty / Swift packages | [Package.resolved](../Bailey.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved) · 许可证随上游源码维护 |
+| Tree-sitter TSX | [来源与固定提交](#语法解析与-diff) |
+| swift-markdown | [源码](https://github.com/swiftlang/swift-markdown) · [Apache-2.0](../Bailey/Resources/Licenses/LICENSE-swift-markdown.txt) |
+| swift-cmark (cmark-gfm) | [源码](https://github.com/swiftlang/swift-cmark) · [许可证原文](../Bailey/Resources/Licenses/LICENSE-swift-cmark.txt) |
+| SwiftSoup | [来源与本地补丁](../Vendor/SwiftSoup/README.md) · [MIT](../Bailey/Resources/Licenses/LICENSE-swiftsoup.txt) |
+| Yams | [源码](https://github.com/jpsim/Yams) · [MIT](../Bailey/Resources/Licenses/LICENSE-yams.txt) |
+| SwiftDraw | [来源与本地补丁](../Vendor/SwiftDraw/README.md) · [zlib](../Bailey/Resources/Licenses/LICENSE-swiftdraw.txt) |
+| MermaidKit | [源码](https://github.com/2389-research/MermaidKit) · [MIT](../Bailey/Resources/Licenses/LICENSE-mermaidkit.txt) |
+| RasterRegions（libpng／LibTIFF；LZW 代码源自加州大学伯克利分校） | [来源与固定版本](../Vendor/RasterRegions/README.md) · [libpng](../Bailey/Resources/Licenses/LICENSE-libpng.txt) · [LibTIFF](../Bailey/Resources/Licenses/LICENSE-libtiff.txt) |
+| SwiftUIMath | [源码](https://github.com/gonzalezreal/swiftui-math) · [MIT](../Bailey/Resources/Licenses/LICENSE-swiftui-math.txt) |
