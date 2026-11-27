@@ -646,8 +646,8 @@ final class Project: nonisolated Identifiable {
 
     /// Asks whether to save before discarding an edited file, matching the
     /// standard macOS Save / Don't Save / Cancel prompt. Presented as a sheet
-    /// on `window` (app-modal only when there's no window) so it doesn't block
-    /// the whole app. Returns `true` if the user backed out — Cancel, or a save
+    /// on its visible owning window; otherwise cancel the close.
+    /// Returns `true` if the user backed out — Cancel, or a save
     /// that failed — so a batch close can stop before tearing down other tabs.
     ///
     /// This is `async` on purpose: awaiting the sheet means each prompt in a

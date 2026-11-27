@@ -206,9 +206,8 @@ enum ProjectCloseConfirmation {
     }
 
     static func present(title: String, in window: NSWindow?) async -> NSApplication.ModalResponse {
-        let alert = alert(title: title)
-        if let window { return await alert.beginSheetModal(for: window) }
-        return alert.runModal()
+        guard let window, window.isVisible else { return .cancel }
+        return await alert(title: title).beginSheetModal(for: window)
     }
 }
 
@@ -255,11 +254,7 @@ enum WorkspaceNativeDialogs {
     }
 
     static func showError(_ error: Error, in window: NSWindow?) {
-        let alert = NSAlert(error: error)
-        if let window {
-            alert.beginSheetModal(for: window, completionHandler: { _ in })
-        } else {
-            alert.runModal()
-        }
+        guard let window else { return }
+        NSAlert(error: error).beginSheetModal(for: window, completionHandler: { _ in })
     }
 }

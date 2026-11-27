@@ -63,8 +63,50 @@ private final class WindowCloseDelegateWitness: NSObject, NSWindowDelegate {
 }
 
 @MainActor
+private final class ModalFallbackWitness {
+    var presented = false
+}
+
+@MainActor
 final class WindowCloseIntegrationTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
+    func testMissingPresentationWindowDoesNotRunAppModalOrDiscardUnsavedEditor() async throws {
+        let project = Project(customDirectory: "/fixture", layout: .init())
+        let backend = WindowSaveFixture("original")
+        let file = FileTab(path: "/fixture/draft.txt", backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        let tab = PaneTab(content: .file(file))
+        project.append(tab)
+        file.text = "unsaved draft"
+        file.refreshDirtyState()
+
+        // Dismiss an unexpected legacy application-modal panel so this regression
+        // fails rather than blocking the isolated test runner.
+        let witness = ModalFallbackWitness()
+        let watchdog = Timer(timeInterval: 0.05, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                guard NSApp.modalWindow != nil else { return }
+                witness.presented = true
+                NSApp.stopModal(withCode: .alertThirdButtonReturn)
+            }
+        }
+        RunLoop.main.add(watchdog, forMode: .modalPanel)
+        defer { watchdog.invalidate() }
+
+        project.close(tab)
+        try await wait { file.saveError != nil && !file.autoSaveSuspendedForClose }
+        XCTAssertFalse(witness.presented, "A close without an owning window must not block other windows")
+        XCTAssertTrue(project.tabs.contains { $0 === tab })
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(file.text, "unsaved draft")
+        let stored = await backend.currentText()
+        XCTAssertEqual(stored, "original")
+
+        witness.presented = false
+        WorkspaceNativeDialogs.showError(WindowSaveFixture.Failure.writeRejected, in: nil)
+        XCTAssertFalse(witness.presented, "An error without an owning window must not open an application-modal panel")
+    }
 
     func testFailedCleanEncodingRetryRequiresNativeSaveDiscardOrCancelChoice() async throws {
         let project = Project(customDirectory: "/fixture", layout: .init())

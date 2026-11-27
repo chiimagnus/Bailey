@@ -2960,14 +2960,18 @@ struct GitPanel: View {
         _ entries: [GitStatusModel.Entry], all: Bool,
         trigger: OperationTrigger = .discardAll
     ) {
-        guard hasCurrentPanelTarget, !preparingDiscard, !entries.isEmpty,
-              model.canUseCurrentStatus else { return }
+        guard let window = manager.attachedWindow, hasCurrentPanelTarget,
+              !preparingDiscard, !entries.isEmpty, model.canUseCurrentStatus else { return }
+        let target = model.actionTarget()
+        let ownsReview: @MainActor () -> Bool = {
+            manager.attachedWindow === window && hasCurrentPanelTarget && model.canBrowse(target)
+        }
         preparingDiscard = true
         Task {
             defer { preparingDiscard = false }
             do {
                 let snapshots = try await model.prepareRemoteDiscard(entries)
-                guard hasCurrentPanelTarget else { return }
+                guard ownsReview() else { return }
                 if all {
                     pendingDiscardAll = snapshots
                     pendingDiscardAllTrigger = trigger
@@ -2976,12 +2980,13 @@ struct GitPanel: View {
                     pendingDiscard = snapshots.first
                 }
             } catch GitStatusModel.DiscardReviewError.stale {
-                model.cancelStaleDiscard()
+                if ownsReview() { model.cancelStaleDiscard() }
             } catch {
+                guard ownsReview(), window.isVisible, !(error is CancellationError) else { return }
                 let alert = NSAlert()
                 alert.messageText = String(localized: "Could not verify remote files", table: "Sidebar")
                 alert.informativeText = error.localizedDescription
-                alert.runModal()
+                alert.beginSheetModal(for: window, completionHandler: nil)
             }
         }
     }
