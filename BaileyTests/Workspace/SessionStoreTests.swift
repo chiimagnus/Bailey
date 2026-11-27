@@ -25,8 +25,8 @@ final class SessionStoreTests: XCTestCase {
                             content: .session(workingDirectory: "/fixture/\(index)"),
                             historyKey: "history-\(index)", contextSessionIndex: nil
                         )], selectedTabIndex: nil,
-                        dock: .group(.init(id: UUID(), items: [.files], selected: .files))
-                    )], selectedProjectIndex: 0)
+                        groups: []
+                    )], selectedProjectIndex: 0, layout: .group(DockGroup(items: [.files])))
                 }
                 let histories = Dictionary(uniqueKeysWithValues: (1..<count).map {
                     ("history-\($0)", "output-\($0)")
@@ -66,69 +66,75 @@ final class SessionStoreTests: XCTestCase {
         let application = WorkspaceApplication()
         let window = application.makeWindow()
         defer { window.windowClosed() }
-        func legacy(_ name: String, fraction: Double) -> SessionSnapshot.ProjectSnapshot {
-            let left = DockSavedGroup(id: UUID(), items: [.projects], selected: .projects)
-            let right = DockSavedGroup(id: UUID(), items: [.files, .tab(0)], selected: .tab(0))
+        let left = DockGroup(items: [.projects])
+        let right = DockGroup(items: [.files])
+        let layout = DockNode.split(DockSplit(axis: .horizontal, fraction: 0.6,
+                                              first: .group(left), second: .group(right)))
+        func project(_ name: String, in group: DockGroup) -> SessionSnapshot.ProjectSnapshot {
+            let placement = DockSavedGroup(id: group.id,
+                items: group.items.compactMap { DockSavedItem($0, tabIDs: []) } + [.tab(0)],
+                selected: .tab(0))
             return .init(customDirectory: "/fixture/" + name, tabs: [
                 .init(content: .browser(url: "about:blank"))
-            ], selectedTabIndex: 0, dock: .split(id: UUID(), axis: .horizontal, fraction: fraction,
-                first: .group(left), second: .group(right)))
+            ], selectedTabIndex: 0, groups: [placement])
         }
-        let old = SessionSnapshot(projects: [legacy("A", fraction: 0.3), legacy("B", fraction: 0.6)],
-                                  selectedProjectIndex: 1)
-        XCTAssertTrue(window.restore(from: old, histories: [:]))
-        let expected = try XCTUnwrap(old.projects[1].dock).restoreLayout()
-        XCTAssertEqual(window.dockLayout.root, expected)
-        for project in window.projects {
-            XCTAssertEqual(project.tabs.count, 1)
-            XCTAssertEqual(project.dock.tabOrder, project.tabs.map(\.id))
-            XCTAssertEqual(project.dock.root.groups.map(\.id), expected.groups.map(\.id))
+        let snapshot = SessionSnapshot(projects: [project("A", in: left), project("B", in: right)],
+                                       selectedProjectIndex: 1, layout: layout)
+        XCTAssertTrue(window.restore(from: snapshot, histories: [:]))
+        XCTAssertEqual(window.dockLayout.root, layout)
+        func check(_ window: WorkspaceWindowModel) throws {
+            XCTAssertEqual(window.dockLayout.root, layout)
+            XCTAssertEqual(window.selectedProject?.name, "B")
+            XCTAssertEqual(window.projects.count, 2)
+            for (project, group) in zip(window.projects, [left, right]) {
+                let tab = try XCTUnwrap(project.tabs.first)
+                XCTAssertEqual(project.dock.tabOrder, [tab.id])
+                XCTAssertEqual(project.dock.root.groups.map(\.id), [left.id, right.id])
+                XCTAssertEqual(project.dock.group(containing: .tab(tab.id))?.id, group.id)
+                XCTAssertEqual(project.dock.root.group(id: group.id)?.selected, .tab(tab.id))
+            }
         }
+        try check(window)
         let saved = window.makeWindowSnapshot(captureTerminalHistory: false).snapshot
-        XCTAssertNotNil(saved.layout)
-        XCTAssertTrue(saved.projects.allSatisfy { $0.dock == nil && $0.groups != nil })
+        XCTAssertEqual(saved.layout, layout)
+        XCTAssertEqual(saved.projects.map { $0.groups.count }, [1, 1])
         let bytes = try JSONEncoder().encode(saved)
         let decoded = try JSONDecoder().decode(SessionSnapshot.self, from: bytes)
         let otherApplication = WorkspaceApplication()
         let restored = otherApplication.makeWindow()
         defer { restored.windowClosed() }
         XCTAssertTrue(restored.restore(from: decoded, histories: [:]))
-        XCTAssertEqual(restored.dockLayout.root, expected)
-        XCTAssertEqual(restored.selectedProject?.name, "B")
-        for project in restored.projects {
-            XCTAssertEqual(project.tabs.count, 1)
-            XCTAssertEqual(project.dock.tabOrder, project.tabs.map(\.id))
-            XCTAssertEqual(project.dock.root.groups.map(\.id), expected.groups.map(\.id))
-        }
+        try check(restored)
     }
 
-    func testRestoreSkipsObsoleteProjectsWithoutChangingValidSelection() {
+    func testRestoreSkipsInvalidProjectRecordsWithoutChangingValidSelection() {
         func saved(_ directory: String?, sshHost: String? = nil,
                    file: String? = nil) -> SessionSnapshot.ProjectSnapshot {
             .init(
                 customDirectory: directory, sshHost: sshHost, pinnedFile: file,
                 tabs: [], selectedTabIndex: nil,
-                dock: .group(.init(id: UUID(), items: [.projects, .files], selected: .files))
+                groups: []
             )
         }
 
         let snapshot = SessionSnapshot(projects: [
             saved(nil),
             saved("/tmp/fixed-one"),
-            saved("/tmp/old-local", file: "/tmp/old-local/legacy.txt"),
+            saved("/tmp/invalid-local", file: "/tmp/invalid-local/file.txt"),
             saved("/d/remote", sshHost: "fixture-ssh", file: "/d/remote/source.swift"),
             saved("/tmp/fixed-two"),
-        ], selectedProjectIndex: 4)
+        ], selectedProjectIndex: 4, layout: .group(DockGroup(items: [.projects, .files])))
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         XCTAssertTrue(manager.restore(from: snapshot, histories: [:]))
         XCTAssertEqual(manager.projects.compactMap(\.customDirectory),
                        ["/tmp/fixed-one", "/d/remote", "/tmp/fixed-two"])
         XCTAssertEqual(manager.selectedProject?.name, "fixed-two",
-                       "Removing obsolete snapshots cannot shift selection to a different project")
+                       "Rejecting invalid project records cannot shift selection to a different project")
         XCTAssertEqual(manager.projects[1].name, "source.swift")
-        XCTAssertTrue(manager.projects[1].tabs.contains { $0.content.isFile },
-                      "The current SSH single-file project must remain restorable")
+        XCTAssertEqual(manager.projects[1].pinnedFile, "/d/remote/source.swift")
+        XCTAssertTrue(manager.projects[1].tabs.isEmpty,
+                      "Restoring a project must not reopen a file absent from its saved tabs")
         XCTAssertFalse(manager.projects.contains { $0.pinnedFile != nil && $0.sshHost == nil })
     }
 
@@ -142,7 +148,7 @@ final class SessionStoreTests: XCTestCase {
 
         let saved = SessionStore.load()
         defer { SessionStore.save(saved) }
-        SessionStore.save([SessionSnapshot(projects: [], selectedProjectIndex: nil)])
+        SessionStore.save([SessionSnapshot(projects: [], selectedProjectIndex: nil, layout: .group(DockGroup(items: [.files])))])
         XCTAssertEqual(SessionStore.load().count, 1)
         XCTAssertEqual(oldSuite?.data(forKey: "workspaceSnapshot"), oldBytes,
                        "An isolated XCTest instance must never change previous test fixtures")
@@ -322,18 +328,18 @@ final class SessionStoreTests: XCTestCase {
                 contextSessionIndex: index == 1 ? 0 : nil
             )
         }
-        let dock = DockSavedNode.split(
-            id: UUID(), axis: .horizontal, fraction: 0.3,
-            first: .group(DockSavedGroup(id: UUID(), items: [.files], selected: .files)),
-            second: .group(DockSavedGroup(id: UUID(), items: [.tab(0), .tab(999)], selected: .tab(999)))
-        )
+        let left = DockGroup(items: [.files])
+        let right = DockGroup(items: [])
+        let layout = DockNode.split(DockSplit(axis: .horizontal, fraction: 0.3,
+                                              first: .group(left), second: .group(right)))
+        let placement = DockSavedGroup(id: right.id, items: [.tab(0), .tab(999)], selected: .tab(999))
         let project = Project(
             customDirectory: "/fixture", sshHost: nil, pinnedFile: nil,
-            tabs: tabs, selectedTabIndex: 0, dock: dock
+            tabs: tabs, selectedTabIndex: 0, groups: [placement]
         )
         let snapshot = AppSnapshot(windows: [
-            SessionSnapshot(projects: [project], selectedProjectIndex: 0),
-            SessionSnapshot(projects: [], selectedProjectIndex: nil),
+            SessionSnapshot(projects: [project], selectedProjectIndex: 0, layout: layout),
+            SessionSnapshot(projects: [], selectedProjectIndex: nil, layout: .group(DockGroup(items: []))),
         ])
 
         let encoder = JSONEncoder()
@@ -345,11 +351,46 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(try encoder.encode(decoded), data)
 
         let ids = [UUID()]
-        XCTAssertEqual(dock.groups.flatMap { $0.restore(tabIDs: ids).items }.count, 2)
-        XCTAssertEqual(dock.restoreLayout().groups.flatMap(\.items), [.files])
+        let restored = placement.restore(tabIDs: ids)
+        XCTAssertEqual(restored.items, [.tab(ids[0])])
+        XCTAssertEqual(restored.selected, .tab(ids[0]))
+        XCTAssertEqual(decoded.windows.first?.layout, layout)
     }
 
-    func testMacFileInSSHProjectRestoresFromMacAndLegacyRemoteTabKeepsItsMachine() async throws {
+    func testClosedPinnedSSHFileStaysClosedAfterRoundTrip() throws {
+        let application = WorkspaceApplication()
+        let window = application.makeWindow()
+        defer { window.windowClosed() }
+        let path = "/remote/project/pinned.swift"
+        let snapshot = SessionSnapshot(projects: [.init(
+            customDirectory: "/remote/project", sshHost: "fixture-ssh", pinnedFile: path,
+            tabs: [.init(content: .file(path: path, editorState: nil))],
+            selectedTabIndex: 0, groups: []
+        )], selectedProjectIndex: 0, layout: .group(DockGroup(items: [.files])))
+        XCTAssertTrue(window.restore(from: snapshot, histories: [:]))
+        let project = try XCTUnwrap(window.selectedProject)
+        let tab = try XCTUnwrap(project.tabs.first)
+        XCTAssertEqual(project.tabs.count, 1)
+        guard case .file(let file) = tab.content else {
+            return XCTFail("Expected the saved SSH file")
+        }
+        XCTAssertEqual(file.workspaceIdentity, "ssh:fixture-ssh")
+        project.close(tab)
+        XCTAssertTrue(project.tabs.isEmpty)
+        let saved = window.makeWindowSnapshot(captureTerminalHistory: false).snapshot
+        XCTAssertEqual(saved.projects.first?.pinnedFile, path)
+        XCTAssertTrue(saved.projects.first?.tabs.isEmpty == true)
+        let decoded = try JSONDecoder().decode(SessionSnapshot.self, from: JSONEncoder().encode(saved))
+        let restoredApplication = WorkspaceApplication()
+        let restored = restoredApplication.makeWindow()
+        defer { restored.windowClosed() }
+        XCTAssertTrue(restored.restore(from: decoded, histories: [:]))
+        XCTAssertEqual(restored.selectedProject?.pinnedFile, path)
+        XCTAssertEqual(restored.selectedProject?.name, "pinned.swift")
+        XCTAssertTrue(restored.selectedProject?.tabs.isEmpty == true)
+    }
+
+    func testMacAndRemoteFilesInSSHProjectRestoreTheirOwnMachine() async throws {
         typealias Snapshot = SessionSnapshot.ProjectSnapshot
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -377,16 +418,14 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(restoredMac.text, "Mac bytes")
         XCTAssertEqual(restoredMac.editorState.selectionLocation, 3)
 
-        // A snapshot from before P4 has no localFile key. Preserve SSH identity.
-        var legacyObject = try XCTUnwrap(JSONSerialization.jsonObject(with: json) as? [String: Any])
-        legacyObject.removeValue(forKey: "localFile")
-        let legacy = try JSONDecoder().decode(
-            Snapshot.TabSnapshot.self, from: JSONSerialization.data(withJSONObject: legacyObject)
+        let remoteSnapshot = Snapshot.TabSnapshot(content: mac.content, localFile: false)
+        let restoredSnapshot = try JSONDecoder().decode(
+            Snapshot.TabSnapshot.self, from: JSONEncoder().encode(remoteSnapshot)
         )
-        XCTAssertNil(legacy.localFile)
-        let remoteTab = project.restoreTab(from: legacy)
+        XCTAssertFalse(restoredSnapshot.localFile)
+        let remoteTab = project.restoreTab(from: restoredSnapshot)
         guard case .file(let remote) = remoteTab.content else {
-            return XCTFail("Legacy remote file tab must be restored")
+            return XCTFail("Remote file tab must be restored")
         }
         XCTAssertEqual(remote.workspaceIdentity, "ssh:invalid-p4-snapshot")
         XCTAssertTrue(remote !== restoredMac)
@@ -445,9 +484,10 @@ final class SessionStoreTests: XCTestCase {
                 historyKey: key, contextSessionIndex: nil
             )],
             selectedTabIndex: 0,
-            dock: .group(.init(id: UUID(), items: [.projects, .tab(0)], selected: .tab(0)))
+            groups: []
         )
-        SessionStore.save([.init(projects: [project], selectedProjectIndex: 0)])
+        SessionStore.save([.init(projects: [project], selectedProjectIndex: 0,
+                                 layout: .group(DockGroup(items: [.projects])))])
         TerminalHistoryStore.save([key: output])
 
         let storedKey = try XCTUnwrap(
@@ -508,10 +548,10 @@ final class SessionStoreTests: XCTestCase {
         let firstSaved = try XCTUnwrap(savedProject(SessionStore.load()))
         XCTAssertEqual(firstSaved.customDirectory, directory.path)
         XCTAssertEqual(firstSaved.selectedTabIndex, nil)
-        if case .split(_, _, let fraction, _, _)? = SessionStore.load().first(where: {
+        if case .split(let split)? = SessionStore.load().first(where: {
             $0.projects.contains { $0.customDirectory == directory.path }
         })?.layout {
-            XCTAssertEqual(fraction, 0.31, accuracy: 0.001)
+            XCTAssertEqual(split.fraction, 0.31, accuracy: 0.001)
         } else {
             XCTFail("Layout was not serialized")
         }
@@ -645,78 +685,71 @@ final class SessionStoreTests: XCTestCase {
         XCTFail("Persisted snapshot never reflected the semantic change")
     }
 
-    func testObsoleteInfoItemIsFilteredWithoutDiscardingLayout() throws {
-        typealias Project = SessionSnapshot.ProjectSnapshot
-        let tabID = UUID()
-        let groupID = UUID()
-        let legacy = DockSavedNode.group(DockSavedGroup(
-            id: groupID,
-            items: [.info, .files, .tab(0), .git],
-            selected: .info
-        ))
-        let migrated = try XCTUnwrap(legacy.groups.first).restore(tabIDs: [tabID])
-        XCTAssertEqual(migrated.id, groupID)
-        XCTAssertEqual(migrated.items, [.files, .tab(tabID), .git])
-        XCTAssertEqual(migrated.selected, .files)
-
-        let encoded = try JSONEncoder().encode(DockSavedGroup(migrated, tabIDs: [tabID]))
-        XCTAssertFalse(String(decoding: encoded, as: UTF8.self).contains("info"))
-
-        guard BaileyInstanceMode.isIsolated else { return XCTFail("Snapshot verification requires isolated storage") }
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: BaileyInstanceMode.snapshotSuiteName))
-        let previous = defaults.data(forKey: "workspaceSnapshot")
-        defer {
-            if let previous { defaults.set(previous, forKey: "workspaceSnapshot") }
-            else { defaults.removeObject(forKey: "workspaceSnapshot") }
-        }
-        let firstTab = Project.TabSnapshot(content: .file(path: "/fixture/first", editorState: nil))
-        let secondTab = Project.TabSnapshot(content: .browser(url: "https://example.invalid"))
-        let secondGroupID = UUID()
-        let oldProject = Project(
-            customDirectory: "/fixture/legacy", sshHost: nil, pinnedFile: nil,
-            tabs: [firstTab], selectedTabIndex: 0, dock: legacy
-        )
-        let currentProject = Project(
-            customDirectory: "/fixture/current", sshHost: nil, pinnedFile: nil,
-            tabs: [secondTab], selectedTabIndex: 0,
-            dock: .group(DockSavedGroup(id: secondGroupID, items: [.projects, .tab(0)], selected: .tab(0)))
-        )
-        let app = AppSnapshot(windows: [
-            SessionSnapshot(projects: [oldProject], selectedProjectIndex: 0),
-            SessionSnapshot(projects: [currentProject], selectedProjectIndex: 0),
-        ])
-        defaults.set(try JSONEncoder().encode(app), forKey: "workspaceSnapshot")
-        let windows = SessionStore.load()
-        XCTAssertEqual(windows.count, 2)
-        XCTAssertEqual(windows.map(\.selectedProjectIndex), [0, 0])
-        let loadedOld = try XCTUnwrap(windows.first?.projects.first)
-        let loadedCurrent = try XCTUnwrap(windows.last?.projects.first)
-        XCTAssertEqual(loadedOld.customDirectory, "/fixture/legacy")
-        XCTAssertEqual(loadedCurrent.customDirectory, "/fixture/current")
-        guard case .file(let restoredPath, _) = loadedOld.tabs.first?.content,
-              case .browser(let restoredURL) = loadedCurrent.tabs.first?.content else {
-            return XCTFail("Both windows must retain their original content types")
-        }
-        XCTAssertEqual(restoredPath, "/fixture/first")
-        XCTAssertEqual(restoredURL, "https://example.invalid")
-        XCTAssertEqual(loadedOld.selectedTabIndex, 0)
-        XCTAssertEqual(loadedCurrent.selectedTabIndex, 0)
-        let restoredLegacy = DockWorkspaceModel(layout: .init())
-        let oldLayout = try XCTUnwrap(loadedOld.dock)
-        restoredLegacy.layout.root = oldLayout.restoreLayout()
-        restoredLegacy.restore(oldLayout.groups, tabIDs: [tabID])
-        XCTAssertEqual(restoredLegacy.root.groups.first?.id, groupID)
-        XCTAssertEqual(restoredLegacy.root.groups.first?.items, [.files, .tab(tabID), .git])
-        XCTAssertEqual(restoredLegacy.root.groups.first?.selected, .files)
-        let currentTabID = UUID()
-        let restoredCurrent = try XCTUnwrap(loadedCurrent.dock?.groups.first).restore(tabIDs: [currentTabID])
-        XCTAssertEqual(restoredCurrent.id, secondGroupID)
-        XCTAssertEqual(restoredCurrent.selected, .tab(currentTabID))
-        let currentData = try JSONEncoder().encode(restoredLegacy.snapshot(tabIDs: [tabID]))
-        XCTAssertFalse(String(decoding: currentData, as: UTF8.self).contains("info"))
-
-        for invalid in ["{}", "{\"columns\":[]}", "{\"session\":{\"workingDirectory\":\"/fixture\"}}"] {
-            XCTAssertThrowsError(try JSONDecoder().decode(Project.TabSnapshot.self, from: Data(invalid.utf8)))
+    func testInvalidWindowLayoutIsRejectedWithoutChangingWindow() throws {
+        let application = WorkspaceApplication()
+        let window = application.makeWindow()
+        defer { window.windowClosed() }
+        let before = window.dockLayout.root
+        let project = SessionSnapshot.ProjectSnapshot(customDirectory: "/fixture",
+            tabs: [.init(content: .browser(url: "about:blank"))],
+            selectedTabIndex: 0, groups: [])
+        let contentGroup = DockGroup(items: [.tab(UUID())])
+        var invalidSelection = DockGroup(items: [.files])
+        invalidSelection.selected = .git
+        for group in [contentGroup, invalidSelection] {
+            let snapshot = SessionSnapshot(projects: [project], selectedProjectIndex: 0,
+                                           layout: .group(group))
+            let decoded = try JSONDecoder().decode(SessionSnapshot.self,
+                                                  from: JSONEncoder().encode(snapshot))
+            XCTAssertFalse(window.restore(from: decoded, histories: [:]))
+            XCTAssertEqual(window.dockLayout.root, before)
+            XCTAssertTrue(window.projects.isEmpty)
         }
     }
+
+    func testOnlyCurrentWindowSnapshotSchemaIsAccepted() throws {
+        let application = WorkspaceApplication()
+        let window = application.makeWindow()
+        defer { window.windowClosed() }
+        let project = Project(fallbackName: "fixture", layout: window.dockLayout)
+        project.customDirectory = "/fixture"
+        window.projects = [project]
+        window.selectedProjectID = project.id
+        project.newBrowserTab(initialFocus: .none)
+        let snapshot = window.makeWindowSnapshot(captureTerminalHistory: false).snapshot
+        let data = try JSONEncoder().encode(snapshot)
+        let current = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let decoder = JSONDecoder()
+        XCTAssertNoThrow(try decoder.decode(SessionSnapshot.self, from: data))
+
+        var missingLayout = current
+        missingLayout.removeValue(forKey: "layout")
+        XCTAssertThrowsError(try decoder.decode(SessionSnapshot.self,
+            from: JSONSerialization.data(withJSONObject: missingLayout)))
+
+        let projects = try XCTUnwrap(current["projects"] as? [[String: Any]])
+        var missingGroups = projects
+        missingGroups[0].removeValue(forKey: "groups")
+        var invalid = current
+        invalid["projects"] = missingGroups
+        XCTAssertThrowsError(try decoder.decode(SessionSnapshot.self,
+            from: JSONSerialization.data(withJSONObject: invalid)))
+
+        var missingIdentity = projects
+        var tabs = try XCTUnwrap(projects[0]["tabs"] as? [[String: Any]])
+        tabs[0].removeValue(forKey: "localFile")
+        missingIdentity[0]["tabs"] = tabs
+        invalid["projects"] = missingIdentity
+        XCTAssertThrowsError(try decoder.decode(SessionSnapshot.self,
+            from: JSONSerialization.data(withJSONObject: invalid)))
+
+        var retiredInfo = projects
+        var groups = try XCTUnwrap(projects[0]["groups"] as? [[String: Any]])
+        groups[0]["items"] = [["info": [:] as [String: Any]]]
+        retiredInfo[0]["groups"] = groups
+        invalid["projects"] = retiredInfo
+        XCTAssertThrowsError(try decoder.decode(SessionSnapshot.self,
+            from: JSONSerialization.data(withJSONObject: invalid)))
+    }
+
 }

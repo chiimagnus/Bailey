@@ -635,14 +635,13 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
             let tabs = project.tabs.map(\.id)
             XCTAssertEqual(tabs.count, 5)
             let groups = (0..<5).map { index in
-                DockSavedNode.group(DockSavedGroup(id: UUID(), items: [.tab(index)], selected: .tab(index)))
+                DockSavedGroup(id: UUID(), items: [.tab(index)], selected: .tab(index))
             }
-            let layout = groups.dropFirst().reduce(groups[0]) { partial, group in
-                DockSavedNode.split(id: UUID(), axis: .horizontal, fraction: 0.5,
-                                    first: partial, second: group)
+            let panes = groups.map { DockNode.group(DockGroup(id: $0.id, items: [])) }
+            manager.dockLayout.root = panes.dropFirst().reduce(panes[0]) { partial, pane in
+                .split(DockSplit(axis: .horizontal, fraction: 0.5, first: partial, second: pane))
             }
-            manager.dockLayout.root = layout.restoreLayout()
-            project.dock.restore(layout.groups, tabIDs: tabs)
+            project.dock.restore(groups, tabIDs: tabs)
             let host = NSHostingView(rootView: NativeRetainedFiles(project: project))
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1_700, height: 650),
                                   styleMask: [.titled], backing: .buffered, defer: false)
@@ -693,7 +692,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
             // remains alive and AppKit may retain all five former scroll views.
             for path in paths { project.openFile(path.path) }
             XCTAssertEqual(project.tabs.count, 5)
-            project.dock.restore(layout.groups, tabIDs: project.tabs.map(\.id))
+            project.dock.restore(groups, tabIDs: project.tabs.map(\.id))
             try await settle {
                 host.layoutSubtreeIfNeeded()
                 return project.tabs.allSatisfy { tab in

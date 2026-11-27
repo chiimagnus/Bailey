@@ -1739,9 +1739,10 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
                 pinnedFile: nil,
                 tabs: [],
                 selectedTabIndex: nil,
-                dock: .group(.init(id: UUID(), items: [.files], selected: .files))
+                groups: []
             )
-            return SessionSnapshot(projects: [project], selectedProjectIndex: 0)
+            return SessionSnapshot(projects: [project], selectedProjectIndex: 0,
+                                   layout: .group(DockGroup(items: [.files])))
         }
         SessionStore.save([snapshot(named: "one"), snapshot(named: "two")])
         let application = WorkspaceApplication(loadSavedState: true)

@@ -79,8 +79,9 @@ final class WorkspaceApplication {
     /// GUI launch restores the saved windows; test owners start empty unless
     /// a test explicitly requests persisted state.
     init(loadSavedState: Bool = false) {
-        pendingRestores = loadSavedState ? SessionStore.load() : []
-        pendingHistories = loadSavedState ? TerminalHistoryStore.load() : [:]
+        let snapshots = loadSavedState ? SessionStore.load() : []
+        pendingRestores = snapshots
+        pendingHistories = snapshots.isEmpty ? [:] : TerminalHistoryStore.load()
         if BaileyInstanceMode.isIsolated,
            let path = ProcessInfo.processInfo.environment["BAILEY_UI_TEST_PROJECT"],
            URL(fileURLWithPath: path).standardizedFileURL.pathComponents.contains(

@@ -4,7 +4,7 @@ import Observation
 
 /// One movable workspace tab. A project owns its live editor/terminal tabs;
 /// this model owns only where each tab is displayed.
-nonisolated enum DockItem: Hashable, Sendable {
+nonisolated enum DockItem: Codable, Hashable, Sendable {
     case projects
     case files
     case git
@@ -45,7 +45,7 @@ enum DockDropHitTest {
     }
 }
 
-struct DockGroup: Equatable {
+struct DockGroup: Codable, Equatable {
     let id: UUID
     var items: [DockItem]
     var selected: DockItem?
@@ -57,7 +57,7 @@ struct DockGroup: Equatable {
     }
 }
 
-struct DockSplit: Equatable {
+struct DockSplit: Codable, Equatable {
     let id: UUID
     var axis: DockAxis
     var fraction: Double
@@ -73,7 +73,7 @@ struct DockSplit: Equatable {
     }
 }
 
-indirect enum DockNode: Equatable {
+indirect enum DockNode: Codable, Equatable {
     case group(DockGroup)
     case split(DockSplit)
 
@@ -182,7 +182,7 @@ indirect enum DockNode: Equatable {
 /// Saved tab references are indices into the *persistable* project tab list:
 /// restored PaneTab UUIDs are intentionally different from the original IDs.
 enum DockSavedItem: Codable, Hashable {
-    case projects, info, files, git, tab(Int)
+    case projects, files, git, tab(Int)
 
     init?(_ item: DockItem, tabIDs: [UUID]) {
         switch item {
@@ -199,7 +199,6 @@ enum DockSavedItem: Codable, Hashable {
     func resolve(tabIDs: [UUID]) -> DockItem? {
         switch self {
         case .projects: return .projects
-        case .info: return nil
         case .files: return .files
         case .git: return .git
         case .tab(let index):
@@ -224,43 +223,6 @@ extension DockSavedGroup {
     func restore(tabIDs: [UUID]) -> DockGroup {
         DockGroup(id: id, items: items.compactMap { $0.resolve(tabIDs: tabIDs) },
                   selected: selected?.resolve(tabIDs: tabIDs))
-    }
-}
-
-indirect enum DockSavedNode: Codable {
-    case group(DockSavedGroup)
-    case split(id: UUID, axis: DockAxis, fraction: Double, first: DockSavedNode, second: DockSavedNode)
-
-    init(_ node: DockNode) {
-        switch node {
-        case .group(let group):
-            self = .group(DockSavedGroup(group, tabIDs: []))
-        case .split(let split):
-            self = .split(
-                id: split.id, axis: split.axis, fraction: split.fraction,
-                first: DockSavedNode(split.first),
-                second: DockSavedNode(split.second)
-            )
-        }
-    }
-
-    var groups: [DockSavedGroup] {
-        switch self {
-        case .group(let group): [group]
-        case .split(_, _, _, let first, let second): first.groups + second.groups
-        }
-    }
-
-    func restoreLayout() -> DockNode {
-        switch self {
-        case .group(let saved):
-            return .group(saved.restore(tabIDs: []))
-        case .split(let id, let axis, let fraction, let first, let second):
-            return .split(DockSplit(
-                id: id, axis: axis, fraction: fraction,
-                first: first.restoreLayout(), second: second.restoreLayout()
-            ))
-        }
     }
 }
 

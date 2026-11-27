@@ -1623,9 +1623,9 @@ final class WorkspaceWindowModel {
                         histories[key] = history
                         historyKey = key
                     }
-                    let isLocalFile: Bool? = if case .file(let file) = tab.content {
-                        file.workspaceIdentity == nil ? true : nil
-                    } else { nil }
+                    let isLocalFile = if case .file(let file) = tab.content {
+                        file.workspaceIdentity == nil
+                    } else { false }
                     return (tab, ProjectSnapshot.TabSnapshot(
                         content: content, historyKey: historyKey,
                         contextSessionIndex: tab.contextSession.flatMap { context in
@@ -1645,7 +1645,7 @@ final class WorkspaceWindowModel {
                 )
             },
             selectedProjectIndex: projects.firstIndex { $0.id == selectedProjectID },
-            layout: DockSavedNode(dockLayout.root)
+            layout: dockLayout.root
         )
         return (snapshot, histories)
     }
@@ -1681,17 +1681,11 @@ final class WorkspaceWindowModel {
 
     /// Rebuilds projects and tabs from the saved window snapshot.
     func restore(from snapshot: SessionSnapshot, histories: [String: String]) -> Bool {
-        if let saved = snapshot.layout ?? {
-            // Only older snapshots need to choose a project's layout.
-            let eligible = snapshot.projects.indices.filter {
-                let project = snapshot.projects[$0]
-                return project.customDirectory != nil && (project.sshHost != nil || project.pinnedFile == nil)
-            }
-            let selected = snapshot.selectedProjectIndex.flatMap { eligible.contains($0) ? $0 : nil } ?? eligible.first
-            return selected.flatMap { snapshot.projects[$0].dock }
-        }() {
-            dockLayout.root = saved.restoreLayout()
-        }
+        guard snapshot.layout.groups.allSatisfy({ group in
+            group.items.allSatisfy { $0.contentTabID == nil }
+                && (group.selected.map(group.items.contains) ?? group.items.isEmpty)
+        }) else { return false }
+        dockLayout.root = snapshot.layout
         var restoredSelection: UUID?
         for (index, saved) in snapshot.projects.enumerated() {
             guard let directory = saved.customDirectory,
@@ -1715,18 +1709,8 @@ final class WorkspaceWindowModel {
             if let index = saved.selectedTabIndex, project.tabs.indices.contains(index) {
                 project.selectTab(project.tabs[index].id)
             }
-            project.dock.restore(saved.groups ?? saved.dock?.groups ?? [], tabIDs: project.tabs.map(\.id))
+            project.dock.restore(saved.groups, tabIDs: project.tabs.map(\.id))
             project.resetRecency()
-            if let pinnedFile = project.pinnedFile,
-               !project.tabs.map(\.content).contains(where: { content in
-                   if case .file(let file) = content {
-                       return file.path == pinnedFile
-                           && file.workspaceIdentity == project.workspaceIdentity
-                   }
-                   return false
-               }) {
-                project.openFile(pinnedFile)
-            }
             projects.append(project)
             if index == snapshot.selectedProjectIndex { restoredSelection = project.id }
         }

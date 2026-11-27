@@ -824,7 +824,7 @@ final class Project: nonisolated Identifiable {
     ) -> PaneTab {
         let tab = PaneTab(content: makeContent(
             from: snap.content,
-            localFile: snap.localFile == true,
+            localFile: snap.localFile,
             restoredHistory: snap.historyKey.flatMap { histories[$0] }
         ))
         append(tab)
@@ -833,8 +833,8 @@ final class Project: nonisolated Identifiable {
 
     private func makeContent(
         from snap: SessionSnapshot.ProjectSnapshot.ContentSnapshot,
-        localFile: Bool = false,
-        restoredHistory: String? = nil
+        localFile: Bool,
+        restoredHistory: String?
     ) -> PaneContent {
         switch snap {
         case .session(let workingDirectory):
